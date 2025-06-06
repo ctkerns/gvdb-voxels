@@ -32,6 +32,8 @@
 #include<unistd.h>
 #include<sys/timeb.h>
 
+#include "file_png.h"
+
 Display *g_dpy = 0;
 
 std::vector<NVPWindow*> g_windows;
