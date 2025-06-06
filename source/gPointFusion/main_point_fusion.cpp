@@ -15,6 +15,7 @@ using namespace nvdb;
 #include "nv_gui.h"			// gui system
 #include <GL/glew.h>
 #include <fstream> 
+#include <chrono>
 
 #include "string_helper.h"
 
@@ -451,7 +452,7 @@ bool Sample::init()
 	m_show_pov = true;
 	m_use_color = false;
 
-	m_speed = 0;
+	m_speed = 10;
 	m_scanres = Vector3DI(240, 180, 0 );	
 
 	m_max_samples = 1;
@@ -734,7 +735,11 @@ void Sample::display()
 	clearScreenGL();
 
 	// Render frame
+  auto start = std::chrono::high_resolution_clock::now();
 	render_frame();
+  auto end = std::chrono::high_resolution_clock::now();
+  auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+	nvprintf ( "render_frame. %6.3f ms\n", duration.count()/1000.0f );
 
 	// Move car		
 	m_carcam.moveRelative(0, 0, float(-m_speed));
@@ -750,7 +755,11 @@ void Sample::display()
 		// Scan buildings
 		ScanBuildings ();
 
+    auto start = std::chrono::high_resolution_clock::now();
 		render_update ();
+    auto end = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+    nvprintf ( "render_update. %6.3f ms\n", duration.count()/1000.0f );
 
 		m_frame++;		
 		m_sample = 1;
