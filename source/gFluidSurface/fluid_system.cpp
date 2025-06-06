@@ -7,6 +7,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //-----------------------------------------------------------------------------
 
+#include <algorithm>
 #include <assert.h>
 #include <stdio.h>
 #include <cuda.h>	
@@ -522,7 +523,10 @@ void FluidSystem::Run ()
 	case RUN_GPU_FULL:					// Full CUDA pathway, GRID-accelerted GPU, /w deep copy sort		
 		InsertParticlesCUDA ( 0x0, 0x0, 0x0 );		
 		PrefixSumCellsCUDA ( 0x0, 1 );		
-		CountingSortFullCUDA ( 0x0 );
+    Vector3DF *particles = (Vector3DF *) malloc( mNumPoints * sizeof(Vector3DF) );
+		CountingSortFullCUDA ( particles );
+    AnalyzeGridOccupancy ( particles );
+    free(particles);
 		#ifdef FLUID_INTEGRITY
 			IntegrityCheck();
 		#endif				
@@ -567,6 +571,58 @@ void FluidSystem::DebugPrintMemory ()
 	nvprintf ( "  Acceleration Grid:      %d, %f MB\n",	   m_GridTotal, (gsize*m_GridTotal)/1048576.0 );
 	nvprintf ( "  Acceleration Neighbors: %d, %f MB (%f)\n", m_NeighborNum, (nsize*m_NeighborNum)/1048576.0, (nsize*m_NeighborMax)/1048576.0 );
 	
+}
+
+void FluidSystem::AnalyzeGridOccupancy ( Vector3DF *particles )
+{
+  auto getCell = [&](Vector3DF particle) -> Vector3DI {
+    return Vector3DI((particle - m_GridMin) * m_GridDelta);
+  };
+
+  auto getCellIdx = [&](Vector3DI gc) -> size_t {
+    return (gc.y * m_GridRes.z + gc.z)*m_GridRes.x + gc.x;
+  };
+
+  auto posInCell = [&](Vector3DF particle) -> Vector3DF {
+    return ((particle - m_GridMin) * m_GridDelta) - getCell(particle);
+  };
+
+  size_t numCells = getCellIdx(getCell(particles[mNumPoints - 1])) + 1;
+
+  std::vector<size_t> particleCount(numCells, 0);
+  std::vector<bool> occupiedCell(numCells, false);
+  std::vector<Vector3DF> bbMin(numCells, Vector3DF(1.0, 1.0, 1.0));
+  std::vector<Vector3DF> bbMax(numCells, Vector3DF(0.0, 0.0, 0.0));
+
+  // TODO before any memory access, make sure particle is in bounds.
+  for (size_t i=0; i < mNumPoints; i++) {
+    Vector3DI gc = getCell(particles[i]);
+    size_t gs = getCellIdx(gc);
+
+    Vector3DF pos = posInCell(particles[i]);
+    bbMin[gs].x = std::min(bbMin[gs].x, pos.x);
+    bbMin[gs].y = std::min(bbMin[gs].y, pos.y);
+    bbMin[gs].z = std::min(bbMin[gs].z, pos.z);
+    bbMax[gs].x = std::max(bbMax[gs].x, pos.x);
+    bbMax[gs].y = std::max(bbMax[gs].y, pos.y);
+    bbMax[gs].z = std::max(bbMax[gs].z, pos.z);
+
+    particleCount[gs]++;
+    occupiedCell[gs] = true;
+  }
+
+  int numOccupiedCells = std::count(occupiedCell.begin(), occupiedCell.end(), true);
+  nvprintf("Average Particles per occupied cell: %f\n", float(mNumPoints)/numOccupiedCells);
+
+  float unused_volume = 0.0f;
+  for (size_t i=0; i < numCells; i++) {
+      if (!occupiedCell[i]) continue;
+
+      Vector3DF edges = bbMax[i] - bbMin[i];
+      unused_volume += 1.0f - edges.x*edges.y*edges.z;
+  }
+
+  nvprintf("Average Unused Volume per cell: %f\n", unused_volume/numOccupiedCells);
 }
 
 void FluidSystem::DrawDomain ()

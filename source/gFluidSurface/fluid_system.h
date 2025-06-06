@@ -217,6 +217,7 @@
 		void ValidateResults ();
 		void TestPrefixSum ( int num );
 		void DebugPrintMemory ();		
+    void AnalyzeGridOccupancy( Vector3DF *particles );
 		int SelectParticle ( int x, int y, int wx, int wy, Camera3D& cam );
 		int GetSelected ()		{ return mSelected; }
 
