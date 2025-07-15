@@ -26,6 +26,7 @@ if(GVDB_BUILD_OPTIX_SAMPLES)
     add_subdirectory("source/gInteractiveOptix" "gInteractiveOptix")
     add_subdirectory("source/gPointCloud" "gPointCloud")
     add_subdirectory("source/gPointFusion" "gPointFusion")
+    add_subdirectory("source/gFluidFLIP" "gFluidFLIP")
 endif()
 
 # GVDB samples using OpenVDB, not built by default.
