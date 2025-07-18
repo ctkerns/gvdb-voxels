@@ -324,13 +324,8 @@ void Sample::simulate() {
 
 void Sample::upload_points() {
   // Load input data
-  auto fluid_pnts = fluid.getPoints();
-
-  Vector3DF *pnts = (Vector3DF *)m_pnts.cpu;
-  for (int i = 0; i < m_numpnts; i++) {
-    pnts[i] = fluid_pnts[i];
-  }
-  gvdb.CommitData(m_pnts); // Commit to GPU
+  gvdb.CommitData(m_pnts, m_numpnts, (char *)fluid.getPoints().data(), 0,
+                  sizeof(Vector3DF)); // Commit to GPU from CPU.
 
   DataPtr temp;
   gvdb.SetPoints(m_pnts, temp, temp);

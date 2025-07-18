@@ -48,9 +48,9 @@ add_library(${PROJECT_NAME_PTX}
     OBJECT
     ${UTIL_OPTIX_KERNELS})
 # The library also needs to compile fluid_system_cuda.cu.
-# target_sources(${PROJECT_NAME_PTX}
-#     PRIVATE fluid_system_cuda.cu
-#             fluid_system_cuda.cuh)
+target_sources(${PROJECT_NAME_PTX}
+    PRIVATE fluid_system_cuda.cu
+            fluid_system_cuda.cuh)
 # Make sure it compiles to PTX files.
 set_target_properties(${PROJECT_NAME_PTX} PROPERTIES CUDA_PTX_COMPILATION ON)
 # Enable the --use_fast_math CUDA compiler flag.
