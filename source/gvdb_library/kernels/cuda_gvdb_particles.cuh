@@ -266,7 +266,8 @@ extern "C" __global__ void gvdbInsertSubcell (
 				offset = atomicAdd( &sc_cnt[sc_idx], (uint) 1);
 				sc_pnt_pos[sc_offset[sc_idx] + offset] = wpos;
 				if ( pvel != 0x0 ) sc_pnt_vel[sc_offset[sc_idx] + offset] = wvel;
-				if ( pclr != 0x0 ) sc_pnt_clr[sc_offset[sc_idx] + offset] = wclr;
+				// if ( pclr != 0x0 ) sc_pnt_clr[sc_offset[sc_idx] + offset] = wclr;
+        sc_pnt_clr[sc_offset[sc_idx] + offset] = i;
 			}
 		}
 	}

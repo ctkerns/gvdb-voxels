@@ -1,12 +1,8 @@
-
-//-----------------------------------------------------------------------------
-// NVIDIA(R) GVDB VOXELS
-// Copyright 2018 NVIDIA Corporation
-// SPDX-License-Identifier: Apache-2.0
-//-----------------------------------------------------------------------------
+// Christopher Kerns 2025
 
 // GVDB library
 #include "gvdb.h"
+#include <cuda.h>
 using namespace nvdb;
 
 // Fluid System
@@ -42,12 +38,10 @@ public:
   virtual void on_arg(std::string arg, std::string val);
 
   void clear_gvdb();
-  void render_update();
   void render_frame();
   void draw_points();
   void draw_topology(); // draw gvdb topology
   void simulate();
-  void upload_points(); // upload points to gpu
   void start_guis(int w, int h);
   void ClearOptix();
   void RebuildOptixGraph(int shading);
@@ -59,7 +53,9 @@ public:
 
   int m_w, m_h;
   int m_numpnts;
-  DataPtr m_pnts;
+  DataPtr m_pos;
+  DataPtr m_vel;
+  DataPtr m_clr;
   int m_shade_style;
   int gl_screen_tex;
   int mouse_down;
@@ -255,23 +251,23 @@ bool Sample::init() {
   createScreenQuadGL(&gl_screen_tex, m_w, m_h);
 
   // Configure
-  gvdb.Configure(3, 3, 3, 3, 4);
-  gvdb.SetChannelDefault(32, 32, 1);
+  gvdb.Configure(3, 3, 3, 3, 3);
   gvdb.AddChannel(0, T_FLOAT, 1, F_LINEAR);
-  gvdb.FillChannel(0, Vector4DF(0, 0, 0, 0));
+  gvdb.AddChannel(1, T_FLOAT3, 1); // velocity
 
   // Initialize GUIs
   start_guis(m_w, m_h);
 
-  clear_gvdb();
-
-  // Initialize fluid sim.
+  // Initialize fluid sim
   fluid.setup();
   m_numpnts = fluid.getPoints().size();
-  gvdb.AllocData(m_pnts, m_numpnts, sizeof(Vector3DF), true);
-  upload_points();
 
-  render_update();
+  // Load input data
+  gvdb.SetDataGPU(m_pos, m_numpnts, fluid.getPosGPU(), 0,
+                  sizeof(Vector3DF));
+  gvdb.SetDataGPU(m_vel, m_numpnts, fluid.getVelGPU(), 0,
+                  sizeof(Vector3DF));
+  gvdb.AllocData(m_clr, m_numpnts, sizeof(uint), true);
 
   // Rebuild the Optix scene graph with GVDB
   if (m_render_optix)
@@ -305,33 +301,24 @@ void Sample::ReportMemory() {
     nvprintf("%s", outlist[n].c_str());
 }
 
-void Sample::clear_gvdb() {
-  // Clear
-  DataPtr temp;
-  gvdb.SetPoints(temp, temp, temp);
-  gvdb.CleanAux();
-}
-
 void Sample::simulate() {
+  gvdb.SetPoints(m_pos, m_vel, m_clr);
+
   // Run fluid simulation
   PERF_PUSH("Simulate");
-  fluid.run();
-  upload_points();
-  render_update();
-
+  fluid.run(gvdb);
   PERF_POP();
-}
 
-void Sample::upload_points() {
-  // Load input data
-  gvdb.CommitData(m_pnts, m_numpnts, (char *)fluid.getPoints().data(), 0,
-                  sizeof(Vector3DF)); // Commit to GPU from CPU.
+  // Test point indices.
+  // gvdb.RetrieveData(m_clr);
+  // uint *indices = (uint*) m_clr.cpu;
+  // for (int i=0; i < m_numpnts; i++) {
+  //   nvprintf("idx[%d] = %d\n", i, indices[i]);
+  // }
 
   DataPtr temp;
-  gvdb.SetPoints(m_pnts, temp, temp);
-}
+  gvdb.SetPoints(m_pos, m_vel, temp);
 
-void Sample::render_update() {
   // Rebuild GVDB Render topology
   PERF_PUSH("Dynamic Topology");
   gvdb.RebuildTopology(m_numpnts, m_radius * 2.0f, m_origin);
@@ -339,6 +326,19 @@ void Sample::render_update() {
                       true); // false. no commit pool	false. no compute bounds
   gvdb.UpdateAtlas();
   PERF_POP();
+
+  // Test Reading back data.
+  // cuCtxSynchronize();
+  // gvdb.FillChannel(1, Vector4DF(1.0f, -9.8f, -1.0f, 0.0f)); // TODO: Temp to test GVDB.
+  // cuCtxSynchronize();
+
+  // DataPtr readback;
+  // gvdb.AllocData(readback, gvdb.getVoxCnt(0), sizeof(Vector3DF), true);
+  // gvdb.AtlasRetrieveBrickXYZ(1, Vector3DI(2, 2, 2), readback);
+  // assert(readback.cpu != nullptr);
+  // Vector3DF *reads = reinterpret_cast<Vector3DF*>(readback.cpu);
+  // nvprintf("\n%f, %f, %f\n", reads[0].x, reads[0].y, reads[0].z);
+  // gvdb.FreeData(readback);
 
   // Gather points to level set
   PERF_PUSH("Points-to-Voxels");
@@ -436,7 +436,7 @@ void Sample::draw_topology() {
 }
 
 void Sample::draw_points() {
-  Vector3DF *fpos = (Vector3DF *)m_pnts.cpu;
+  Vector3DF *fpos = (Vector3DF *)m_pos.cpu;
 
   Vector3DF p1, p2;
   Vector3DF c;

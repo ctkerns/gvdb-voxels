@@ -1,3 +1,9 @@
+// Christopher Kerns 2025
+
+// GVDB library
+#include "gvdb.h"
+using namespace nvdb;
+
 #include <vector>
 
 #include "main.h"
@@ -10,7 +16,9 @@ enum Component { X, Y, Z };
 
 #define FUNC_INTEGRATE 0
 #define FUNC_HANDLE_COLLISION 1
-#define FUNC_MAX 2
+#define FUNC_TRANSFER_FROM_GRID 2
+#define FUNC_TRANSFER_TO_GRID 3
+#define FUNC_MAX 4
 
 class FluidSystem {
 private:
@@ -41,9 +49,11 @@ public:
   void LoadKernel(int id, std::string kname);
 
   void setup();
-  void run();
+  void run(VolumeGVDB &gvdb);
 
   std::vector<Vector3DF> getPoints() { return pos; }
+  CUdeviceptr getPosGPU() { return cu_pos; }
+  CUdeviceptr getVelGPU() { return cu_vel; }
   Vector3DI getCellIndex(Vector3DF pos);
 
   void integrateParticles();
@@ -52,7 +62,8 @@ public:
   Vector3DF offsetGrid(Vector3DF pos, Component component);
   void getNeighborCellIndices(Vector3DI idx, Vector3DI (&indices)[8]);
   Vector3DF getVelocityFromGrid(Vector3DF pos, Component component);
-  float addVelocityFromParticle(Vector3DF pos, Vector3DF vel, Component component);
+  float addVelocityFromParticle(Vector3DF pos, Vector3DF vel,
+                                Component component);
   void clearCells();
   void transferFromGrid();
   void transferToGrid();
@@ -63,20 +74,20 @@ public:
   void transferFromCUDA();
   void integrateParticlesCUDA();
   void handleParticleCollisionCUDA();
+  void transferFromGridCUDA(VolumeGVDB &gvdb);
+  void transferToGridCUDA(VolumeGVDB &gvdb);
 
   // Simulation parameters.
   const Vector3DI gridres = Vector3DI(30, 30, 30);
-  const int numpnts = (gridres.x - 2) * (gridres.y - 2) * (gridres.z - 2);
   const int solveIters = 200;
   const float overRelaxation = 1.9f;
   FluidParams fp;
   CUdeviceptr cu_fp;
+  int subcell = 4;
 
   const int threadsPerBlock = 512;
-  const int numThreads =
-      (numpnts < threadsPerBlock) ? numpnts : threadsPerBlock;
-  const int numBlocks = (numpnts % numThreads != 0) ? (numpnts / numThreads + 1)
-                                                    : (numpnts / numThreads);
+  int numThreads;
+  int numBlocks;
 };
 
 template <typename T> T clamp(T x, T min, T max) {
