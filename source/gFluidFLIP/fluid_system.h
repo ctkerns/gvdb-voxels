@@ -10,9 +10,7 @@ using namespace nvdb;
 #include "nv_gui.h"
 
 #include "fluid_params.h"
-
-enum CellType { Fluid, Solid, Air };
-enum Component { X, Y, Z };
+#include "fluid_utils.h"
 
 #define FUNC_INTEGRATE 0
 #define FUNC_HANDLE_COLLISION 1
@@ -40,7 +38,7 @@ private:
   CUmodule m_Module;
   CUfunction m_Func[FUNC_MAX];
 
-  bool mbDebug = false;
+  bool mbDebug = true;
 
 public:
   FluidSystem();
@@ -54,13 +52,9 @@ public:
   std::vector<Vector3DF> getPoints() { return pos; }
   CUdeviceptr getPosGPU() { return cu_pos; }
   CUdeviceptr getVelGPU() { return cu_vel; }
-  Vector3DI getCellIndex(Vector3DF pos);
 
   void integrateParticles();
   void handleParticleCollision();
-  void getCellWeights(Vector3DF pos, Vector3DI idx, float (&w)[8]);
-  Vector3DF offsetGrid(Vector3DF pos, Component component);
-  void getNeighborCellIndices(Vector3DI idx, Vector3DI (&indices)[8]);
   Vector3DF getVelocityFromGrid(Vector3DF pos, Component component);
   float addVelocityFromParticle(Vector3DF pos, Vector3DF vel,
                                 Component component);

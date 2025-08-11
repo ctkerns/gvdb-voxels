@@ -96,7 +96,7 @@ void FluidSystem::setup() {
     for (int j = 1; j < fp.gridres.y - 1; j++) {
       for (int k = 1; k < fp.gridres.z - 1; k++) {
         pos[p++] = Vector3DF((i + fp.gridres.x)/2.0f, (j + fp.gridres.x)/2.0f, (k + fp.gridres.x)/2.0f)*fp.h;
-        // pos[p++] = Vector3DF(i, j, k)*h;
+        // pos[p++] = Vector3DF(i, j, k)*fp.h;
       }
     }
   }
@@ -148,112 +148,61 @@ void FluidSystem::run(VolumeGVDB &gvdb) {
   transferFromGrid();
 }
 
-// Get index of cell this particle is in.
-Vector3DI FluidSystem::getCellIndex(Vector3DF pos) {
-  int x = (int)clamp(pos.x / fp.h, 0.0f, (float)fp.gridres.x);
-  int y = (int)clamp(pos.y / fp.h, 0.0f, (float)fp.gridres.y);
-  int z = (int)clamp(pos.z / fp.h, 0.0f, (float)fp.gridres.z);
-
-  return Vector3DI(x, y, z);
-}
-
-void FluidSystem::getCellWeights(Vector3DF pos, Vector3DI idx, float (&w)[8]) {
-  Vector3DF posInCell = pos - idx * fp.h;
-
-  w[0] = (1.0f - posInCell.x / fp.h) * (1.0f - posInCell.y / fp.h) * (1.0f - posInCell.z / fp.h);
-  w[1] = (1.0f - posInCell.x / fp.h) * (1.0f - posInCell.y / fp.h) * (posInCell.z / fp.h);
-  w[2] = (1.0f - posInCell.x / fp.h) * (posInCell.y / fp.h) * (1.0f - posInCell.z / fp.h);
-  w[3] = (1.0f - posInCell.x / fp.h) * (posInCell.y / fp.h) * (posInCell.z / fp.h);
-  w[4] = (posInCell.x / fp.h) * (1.0f - posInCell.y / fp.h) * (1.0f - posInCell.z / fp.h);
-  w[5] = (posInCell.x / fp.h) * (1.0f - posInCell.y / fp.h) * (posInCell.z / fp.h);
-  w[6] = (posInCell.x / fp.h) * (posInCell.y / fp.h) * (1.0f - posInCell.z / fp.h);
-  w[7] = (posInCell.x / fp.h) * (posInCell.y / fp.h) * (posInCell.z / fp.h);
-}
-
-Vector3DF FluidSystem::offsetGrid(Vector3DF pos, Component component) {
-  switch (component) {
-  case Component::X:
-    return pos - Vector3DF(0.0f, fp.h / 2.0f, fp.h / 2.0f);
-  case Component::Y:
-    return pos - Vector3DF(fp.h / 2.0f, 0.0f, fp.h / 2.0f);
-  case Component::Z:
-    return pos - Vector3DF(fp.h / 2.0f, fp.h / 2.0f, 0.0f);
-  };
-}
-
-void FluidSystem::getNeighborCellIndices(Vector3DI idx, Vector3DI (&indices)[8]) {
-  indices[0] = idx;
-  indices[1] = idx + Vector3DI(0, 0, 1);
-  indices[2] = idx + Vector3DI(0, 1, 0);
-  indices[3] = idx + Vector3DI(0, 1, 1);
-  indices[4] = idx + Vector3DI(1, 0, 0);
-  indices[5] = idx + Vector3DI(1, 0, 1);
-  indices[6] = idx + Vector3DI(1, 1, 0);
-  indices[7] = idx + Vector3DI(1, 1, 1);
-}
-
 Vector3DF FluidSystem::getVelocityFromGrid(Vector3DF pos, Component component) {
-  pos = offsetGrid(pos, component);
-  Vector3DI cellidx = getCellIndex(pos);
+  float3 ppos = offsetGrid(fp, make_float3(pos.x, pos.y, pos.z), component);
+  int3 cellidx = make_int3(ppos.x / fp.h, ppos.y / fp.h, ppos.z / fp.h);
 
-  float w[8];
-  getCellWeights(pos, cellidx, w);
-
-  Vector3DI cellIndices[8];
+  int3 cellIndices[8];
   getNeighborCellIndices(cellidx, cellIndices);
 
   // Velocities from each corner.
-  Vector3DF q[8];
-  for (int i = 0; i < 8; i++)
-    q[i] = cellvel[cellIndices[i].x][cellIndices[i].y][cellIndices[i].z];
-
-  Vector3DI offsetCell =
-      Vector3DI(component == Component::X, component == Component::Y,
-                component == Component::Z);
-
+  float3 vel[8];
   for (int i = 0; i < 8; i++) {
-    if (celltype[cellIndices[i].x][cellIndices[i].y][cellIndices[i].z] ==
-            CellType::Air &&
-        celltype[cellIndices[i].x + offsetCell.x]
-                [cellIndices[i].y + offsetCell.y]
-                [cellIndices[i].z + offsetCell.z] == CellType::Air) {
-      w[i] = 0.0f;
-    }
+    Vector3DF gridvel =
+        cellvel[cellIndices[i].x][cellIndices[i].y][cellIndices[i].z];
+
+    vel[i] = make_float3(gridvel.x, gridvel.y, gridvel.z);
   }
 
-  Vector3DF mask =
-      Vector3DF(component == Component::X, component == Component::Y,
+  int3 offsetCell =
+      make_int3(component == Component::X, component == Component::Y,
                 component == Component::Z);
 
-  Vector3DF qsum = Vector3DF(0.0f, 0.0f, 0.0f);
-  float wsum = 0.0f;
-
+  bool valid[8];
   for (int i = 0; i < 8; i++) {
-    qsum += q[i] * mask * w[i];
-    wsum += w[i];
+    valid[i] =
+        !(celltype[cellIndices[i].x][cellIndices[i].y][cellIndices[i].z] ==
+              CellType::Air &&
+          celltype[cellIndices[i].x - offsetCell.x]
+                  [cellIndices[i].y - offsetCell.y]
+                  [cellIndices[i].z - offsetCell.z] == CellType::Air);
   }
 
-  Vector3DF qp = qsum / wsum;
-  return qp;
+  float3 rvel = getVelocityFromGridCell(ppos - make_float3(cellidx), vel, valid,
+                                        component);
+  return Vector3DF(rvel.x, rvel.y, rvel.z);
 }
 
 float FluidSystem::addVelocityFromParticle(Vector3DF pos, Vector3DF vel,
                                            Component component) {
-  pos = offsetGrid(pos, component);
-  Vector3DI cellidx = getCellIndex(pos);
+  float3 ppos = offsetGrid(fp, make_float3(pos.x, pos.y, pos.z), component);
+  int3 cellidx = make_int3(ppos.x / fp.h, ppos.y / fp.h, ppos.z / fp.h);
 
   // Weights for each corner.
   float w[8];
-  getCellWeights(pos, cellidx, w);
+  float3 pposc =
+      make_float3(ppos.x - cellidx.x, ppos.y - cellidx.y, ppos.z - cellidx.z);
+  getCellWeights(pposc, w);
 
   Vector3DF mask =
       Vector3DF(component == Component::X, component == Component::Y,
                 component == Component::Z);
 
-  Vector3DI cellIndices[8];
-  getNeighborCellIndices(cellidx, cellIndices);
+  int3 cellIndices[8];
+  getNeighborCellIndices(*(int3*)(&cellidx), cellIndices);
 
-  for (int i=0; i < 8; i++) {
+  const int max = 8;
+  for (int i=0; i < max; i++) {
     r[cellIndices[i].x][cellIndices[i].y][cellIndices[i].z] += mask * w[i];
     cellvel[cellIndices[i].x][cellIndices[i].y][cellIndices[i].z] += mask * vel * w[i];
   }
@@ -269,27 +218,26 @@ void FluidSystem::integrateParticles() {
 
 // Make sure particles do not escape boundary.
 void FluidSystem::handleParticleCollision() {
-  // TODO: Why is this boundary so small?
   for (int i = 0; i < pos.size(); i++) {
     if (pos[i].x < fp.h) {
       pos[i].x = fp.h;
       vel[i].x = 0.0f;
-    } else if (pos[i].x > (fp.gridres.x - 2) * fp.h) {
-      pos[i].x = (fp.gridres.x - 2) * fp.h;
+    } else if (pos[i].x >= (fp.gridres.x - 1) * fp.h) {
+      pos[i].x = (fp.gridres.x - 1) * fp.h - 0.001f;
       vel[i].x = 0.0f;
     }
     if (pos[i].y < fp.h) {
       pos[i].y = fp.h;
       vel[i].y = 0.0f;
-    } else if (pos[i].y > (fp.gridres.y - 2) * fp.h) {
-      pos[i].y = (fp.gridres.y - 2) * fp.h;
+    } else if (pos[i].y >= (fp.gridres.y - 1) * fp.h) {
+      pos[i].y = (fp.gridres.y - 1) * fp.h - 0.001f;
       vel[i].y = 0.0f;
     }
     if (pos[i].z < fp.h) {
       pos[i].z = fp.h;
       vel[i].z = 0.0f;
-    } else if (pos[i].z > (fp.gridres.z - 2) * fp.h) {
-      pos[i].z = (fp.gridres.z - 2) * fp.h;
+    } else if (pos[i].z >= (fp.gridres.z - 1) * fp.h) {
+      pos[i].z = (fp.gridres.z - 1) * fp.h - 0.001f;
       vel[i].z = 0.0f;
     }
   }
@@ -309,7 +257,7 @@ void FluidSystem::clearCells() {
 
   // Set cells with particles to fluid cells.
   for (int i = 0; i < pos.size(); i++) {
-    Vector3DI cellidx = getCellIndex(pos[i]);
+    Vector3DI cellidx = pos[i] / fp.h;
 
     if (celltype[cellidx.x][cellidx.y][cellidx.z] == CellType::Air) {
       celltype[cellidx.x][cellidx.y][cellidx.z] = CellType::Fluid;
@@ -423,12 +371,14 @@ void FluidSystem::updateParticleDensity() {
   // Add density to each cell from every particle.
   for (int i = 0; i < pos.size(); i++) {
     Vector3DF offsetpos = pos[i] - Vector3DF(fp.h/2.0f, fp.h/2.0f, fp.h/2.0f);
-    Vector3DI cellidx = getCellIndex(offsetpos);
+    Vector3DI cellidx = offsetpos / fp.h;
+    float3 pposc = make_float3(offsetpos.x - cellidx.x, offsetpos.y - cellidx.y,
+                               offsetpos.z - cellidx.z);
     float w[8];
-    getCellWeights(offsetpos, cellidx, w);
+    getCellWeights(pposc, w);
 
-    Vector3DI cellIndices[8];
-    getNeighborCellIndices(cellidx, cellIndices);
+    int3 cellIndices[8];
+    getNeighborCellIndices(*(int3*)(&cellidx), cellIndices);
     for (int i=0; i < 8; i++) {
       particleDensity[cellIndices[i].x][cellIndices[i].y][cellIndices[i].z] += w[i];
     }
@@ -489,7 +439,7 @@ void FluidSystem::transferFromGridCUDA(VolumeGVDB &gvdb) {
 
   CUdeviceptr cuVDBInfo = gvdb.getCUVDBInfo();
   int numSCell = static_cast<int>(pow(gvdb.getRes(0) / subcell, 3)) * num_brick;
-  Vector3DI component = Vector3DI(0, 0, 0);
+  Component component;
   int pntlen = 0;
 
   void *args[10] = {&cuVDBInfo,
@@ -503,28 +453,25 @@ void FluidSystem::transferFromGridCUDA(VolumeGVDB &gvdb) {
                     &gvdb.getAux(AUX_SUBCELL_PNT_CLR).gpu,
                     &gvdb.getAux(AUX_PNTVEL).gpu};
 
-  // Component X.
-  component = Vector3DI(1, 0, 0);
+  component = Component::X;
   gvdb.InsertPointsSubcell(subcell, fp.numpnts, 0.0f,
-                           Vector3DF(0.5f, 0.0f, 0.0f), pntlen);
+                           Vector3DF(0.0f, -0.5f, -0.5f), pntlen);
   cuCheck(
       cuLaunchKernel(m_Func[FUNC_TRANSFER_FROM_GRID], numSCell, 1, 1,
                      subcell, subcell, subcell, 0, NULL, args, NULL),
       "transferFromGridCUDA", "cuLaunch", "FUNC_TRANSFER_FROM_GRID", mbDebug);
 
-  // Component Y.
-  component = Vector3DI(0, 1, 0);
+  component = Component::Y;
   gvdb.InsertPointsSubcell(subcell, fp.numpnts, 0.0f,
-                           Vector3DF(0.0f, 0.5f, 0.0f), pntlen);
+                           Vector3DF(-0.5f, 0.0f, -0.5f), pntlen);
   cuCheck(
       cuLaunchKernel(m_Func[FUNC_TRANSFER_FROM_GRID], numSCell, 1, 1,
                      subcell, subcell, subcell, 0, NULL, args, NULL),
       "transferFromGridCUDA", "cuLaunch", "FUNC_TRANSFER_FROM_GRID", mbDebug);
 
-  // Component Z.
-  component = Vector3DI(0, 0, 1);
+  component = Component::Z;
   gvdb.InsertPointsSubcell(subcell, fp.numpnts, 0.0f,
-                           Vector3DF(0.0f, 0.0f, 0.5f), pntlen);
+                           Vector3DF(-0.5f, -0.5f, 0.0f), pntlen);
   cuCheck(
       cuLaunchKernel(m_Func[FUNC_TRANSFER_FROM_GRID], numSCell, 1, 1,
                      subcell, subcell, subcell, 0, NULL, args, NULL),
@@ -537,8 +484,9 @@ void FluidSystem::transferToGridCUDA(VolumeGVDB &gvdb) {
 
   CUdeviceptr cuVDBInfo = gvdb.getCUVDBInfo();
   int numSCell = static_cast<int>(pow(gvdb.getRes(0) / subcell, 3)) * num_brick;
-  Vector3DI component;
+  Component component;
   int pntlen = 0;
+  float radius = 1.0f;
 
   void *args[9] = {&cuVDBInfo,
                     &numSCell,
@@ -550,30 +498,32 @@ void FluidSystem::transferToGridCUDA(VolumeGVDB &gvdb) {
                     &gvdb.getAux(AUX_SUBCELL_PNT_POS).gpu,
                     &gvdb.getAux(AUX_SUBCELL_PNT_VEL).gpu};
 
-  // Component X.
-  component = Vector3DI(1, 0, 0);
-  gvdb.InsertPointsSubcell(subcell, fp.numpnts, 0.0f,
-                           Vector3DF(0.5f, 0.0f, 0.0f), pntlen);
-  cuCheck(
-      cuLaunchKernel(m_Func[FUNC_TRANSFER_TO_GRID], numSCell, 1, 1,
-                     subcell, subcell, subcell, 0, NULL, args, NULL),
-      "transferToGridCUDA", "cuLaunch", "FUNC_TRANSFER_TO_GRID", mbDebug);
+  gvdb.ClearChannel(1);
 
-  // Component Y.
-  component = Vector3DI(0, 1, 0);
-  gvdb.InsertPointsSubcell(subcell, fp.numpnts, 0.0f,
-                           Vector3DF(0.0f, 0.5f, 0.0f), pntlen);
+  component = Component::X;
+  gvdb.InsertPointsSubcell(subcell, fp.numpnts, radius,
+                           Vector3DF(0.0f, -0.5f, -0.5f), pntlen);
   cuCheck(
       cuLaunchKernel(m_Func[FUNC_TRANSFER_TO_GRID], numSCell, 1, 1,
                      subcell, subcell, subcell, 0, NULL, args, NULL),
       "transferToGridCUDA", "cuLaunch", "FUNC_TRANSFER_TO_GRID", mbDebug);
+  gvdb.UpdateApron(1);
 
-  // Component Z.
-  component = Vector3DI(0, 0, 1);
-  gvdb.InsertPointsSubcell(subcell, fp.numpnts, 0.0f,
-                           Vector3DF(0.0f, 0.0f, 0.5f), pntlen);
+  component = Component::Y;
+  gvdb.InsertPointsSubcell(subcell, fp.numpnts, radius,
+                           Vector3DF(-0.5f, 0.0f, -0.5f), pntlen);
   cuCheck(
       cuLaunchKernel(m_Func[FUNC_TRANSFER_TO_GRID], numSCell, 1, 1,
                      subcell, subcell, subcell, 0, NULL, args, NULL),
       "transferToGridCUDA", "cuLaunch", "FUNC_TRANSFER_TO_GRID", mbDebug);
+  gvdb.UpdateApron(1);
+
+  component = Component::Z;
+  gvdb.InsertPointsSubcell(subcell, fp.numpnts, radius,
+                           Vector3DF(-0.5f, -0.5f, 0.0f), pntlen);
+  cuCheck(
+      cuLaunchKernel(m_Func[FUNC_TRANSFER_TO_GRID], numSCell, 1, 1,
+                     subcell, subcell, subcell, 0, NULL, args, NULL),
+      "transferToGridCUDA", "cuLaunch", "FUNC_TRANSFER_TO_GRID", mbDebug);
+  gvdb.UpdateApron(1);
 }

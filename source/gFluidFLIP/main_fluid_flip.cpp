@@ -193,6 +193,7 @@ void Sample::on_arg(std::string arg, std::string val) {
   }
 }
 
+__attribute__((no_sanitize_address))
 bool Sample::init() {
   m_w = getWidth(); // window width & height
   m_h = getHeight();
@@ -213,9 +214,9 @@ bool Sample::init() {
     optx.InitializeOptix(m_w, m_h);
   }
 
-  gvdb.SetDebug(false);
   gvdb.SetVerbose(false);
   gvdb.SetProfile(false, true);
+  gvdb.SetDebug(true);
   gvdb.SetCudaDevice(m_render_optix ? GVDB_DEV_CURRENT : GVDB_DEV_FIRST);
   gvdb.Initialize();
   gvdb.StartRasterGL();
@@ -254,6 +255,7 @@ bool Sample::init() {
   gvdb.Configure(3, 3, 3, 3, 3);
   gvdb.AddChannel(0, T_FLOAT, 1, F_LINEAR);
   gvdb.AddChannel(1, T_FLOAT3, 1); // velocity
+  gvdb.AddChannel(2, T_UCHAR, 1); // cell type
 
   // Initialize GUIs
   start_guis(m_w, m_h);
@@ -320,24 +322,17 @@ void Sample::simulate() {
   gvdb.SetPoints(m_pos, m_vel, temp);
 
   // Rebuild GVDB Render topology
-  PERF_PUSH("Dynamic Topology");
   gvdb.RebuildTopology(m_numpnts, m_radius * 2.0f, m_origin);
-  gvdb.FinishTopology(false,
-                      true); // false. no commit pool	false. no compute bounds
+  gvdb.FinishTopology(false, true);
   gvdb.UpdateAtlas();
-  PERF_POP();
 
   // Test Reading back data.
-  // cuCtxSynchronize();
-  // gvdb.FillChannel(1, Vector4DF(1.0f, -9.8f, -1.0f, 0.0f)); // TODO: Temp to test GVDB.
-  // cuCtxSynchronize();
-
   // DataPtr readback;
   // gvdb.AllocData(readback, gvdb.getVoxCnt(0), sizeof(Vector3DF), true);
-  // gvdb.AtlasRetrieveBrickXYZ(1, Vector3DI(2, 2, 2), readback);
+  // gvdb.AtlasRetrieveBrickXYZ(1, Vector3DI(1, 1, 1), readback);
   // assert(readback.cpu != nullptr);
   // Vector3DF *reads = reinterpret_cast<Vector3DF*>(readback.cpu);
-  // nvprintf("\n%f, %f, %f\n", reads[0].x, reads[0].y, reads[0].z);
+  // nvprintf("\n%f, %f, %f\n", reads[256].x, reads[256].y, reads[256].z);
   // gvdb.FreeData(readback);
 
   // Gather points to level set
@@ -353,6 +348,8 @@ void Sample::simulate() {
                            static_cast<float>(m_radius), m_origin, scPntLen, 0,
                            0);
   gvdb.UpdateApron(0, 3.0f);
+  gvdb.UpdateApron(1);
+  gvdb.UpdateApron(2);
   PERF_POP();
 
   if (m_render_optix) {
