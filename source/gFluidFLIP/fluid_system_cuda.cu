@@ -43,6 +43,57 @@ __global__ void handleParticleCollision(float3 *pos, float3 *vel) {
   }
 }
 
+__global__ void transferToGrid(VDBInfo *gvdb, int num_sc, Component component,
+                               int *sc_nid, int *sc_cnt, int *sc_off,
+                               int3 *sc_pos, float3 *sc_pnt_pos,
+                               float3 *sc_pnt_vel) {
+  int sc_id = blockIdx.x;
+  if (sc_id >= num_sc) return;
+
+  int3 wpos = sc_pos[sc_id] + make_int3(threadIdx); // World voxel position.
+  VDBNode *node = getNode(gvdb, 0, sc_nid[sc_id]);
+  int3 vox = node->mValue + (wpos - node->mPos); // Atlas index of voxel.
+
+  float3 val = make_float3(0.0f, 0.0f, 0.0f);
+  float r = 0.0f;
+
+  for (int j = 0; j < sc_cnt[sc_id]; j++) {
+    float3 ppos = sc_pnt_pos[sc_off[sc_id] + j];
+
+    // Only take into account particles within this cell.
+    if (ppos.x >= wpos.x - 1 && ppos.x < wpos.x + 1 &&
+        ppos.y >= wpos.y - 1 && ppos.y < wpos.y + 1 &&
+        ppos.z >= wpos.z - 1 && ppos.z < wpos.z + 1) {
+      float weight = (1.0f - abs(ppos.x - wpos.x)) *
+                     (1.0f - abs(ppos.y - wpos.y)) *
+                     (1.0f - abs(ppos.z - wpos.z));
+      val += sc_pnt_vel[sc_off[sc_id] + j] * weight;
+      r += weight;
+    }
+  }
+
+  if (r > 0.0f) val /= r;
+
+  switch (component) {
+  case Component::X:
+    val = make_float3(val.x, 0.0f, 0.0f);
+    break;
+  case Component::Y:
+    val = make_float3(0.0f, val.y, 0.0f);
+    val += fxyz(surf3Dread<float4>(gvdb->volOut[1], vox.x * sizeof(float4),
+                                  vox.y, vox.z));
+    break;
+  case Component::Z:
+    val = make_float3(0.0f, 0.0f, val.z);
+    val += fxyz(surf3Dread<float4>(gvdb->volOut[1], vox.x * sizeof(float4),
+                                  vox.y, vox.z));
+    break;
+  }
+
+  surf3Dwrite(make_float4(val), gvdb->volOut[1], vox.x * sizeof(float4), vox.y,
+              vox.z);
+}
+
 __global__ void transferFromGrid(VDBInfo *gvdb, int num_sc, Component component,
                                  int *sc_nid, int *sc_cnt, int *sc_off,
                                  int3 *sc_pos, float3 *sc_pnt_pos,
@@ -101,55 +152,4 @@ __global__ void transferFromGrid(VDBInfo *gvdb, int num_sc, Component component,
       }
     }
   }
-}
-
-__global__ void transferToGrid(VDBInfo *gvdb, int num_sc, Component component,
-                               int *sc_nid, int *sc_cnt, int *sc_off,
-                               int3 *sc_pos, float3 *sc_pnt_pos,
-                               float3 *sc_pnt_vel) {
-  int sc_id = blockIdx.x;
-  if (sc_id >= num_sc) return;
-
-  int3 wpos = sc_pos[sc_id] + make_int3(threadIdx); // World voxel position.
-  VDBNode *node = getNode(gvdb, 0, sc_nid[sc_id]);
-  int3 vox = node->mValue + (wpos - node->mPos); // Atlas index of voxel.
-
-  float3 val = make_float3(0.0f, 0.0f, 0.0f);
-  float r = 0.0f;
-
-  for (int j = 0; j < sc_cnt[sc_id]; j++) {
-    float3 ppos = sc_pnt_pos[sc_off[sc_id] + j];
-
-    // Only take into account particles within this cell.
-    if (ppos.x >= wpos.x - 1 && ppos.x < wpos.x + 1 &&
-        ppos.y >= wpos.y - 1 && ppos.y < wpos.y + 1 &&
-        ppos.z >= wpos.z - 1 && ppos.z < wpos.z + 1) {
-      float weight = (1.0f - abs(ppos.x - wpos.x)) *
-                     (1.0f - abs(ppos.y - wpos.y)) *
-                     (1.0f - abs(ppos.z - wpos.z));
-      val += sc_pnt_vel[sc_off[sc_id] + j]*weight;
-      r += weight;
-    }
-  }
-
-  if (r > 0.0f) val /= r;
-
-  switch (component) {
-  case Component::X:
-    val = make_float3(val.x, 0.0f, 0.0f);
-    break;
-  case Component::Y:
-    val = make_float3(0.0f, val.y, 0.0f);
-    val += fxyz(surf3Dread<float4>(gvdb->volOut[1], vox.x * sizeof(float4),
-                                  vox.y, vox.z));
-    break;
-  case Component::Z:
-    val = make_float3(0.0f, 0.0f, val.z);
-    val += fxyz(surf3Dread<float4>(gvdb->volOut[1], vox.x * sizeof(float4),
-                                  vox.y, vox.z));
-    break;
-  }
-
-  surf3Dwrite(make_float4(val), gvdb->volOut[1], vox.x * sizeof(float4), vox.y,
-              vox.z);
 }

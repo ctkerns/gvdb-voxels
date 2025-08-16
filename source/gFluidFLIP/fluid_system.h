@@ -70,21 +70,21 @@ public:
 
   void integrateParticles();
   void handleParticleCollision();
-  Vector3DF getVelocityFromGrid(Vector3DF pos, Component component);
   float addVelocityFromParticle(Vector3DF pos, Vector3DF vel,
                                 Component component);
-  void clearCells();
-  void transferFromGrid();
+  Vector3DF getVelocityFromGrid(Vector3DF pos, Component component);
   void transferToGrid();
-  void solveIncompressibility();
+  void transferFromGrid();
+  void clearCells();
   void updateParticleDensity();
+  void solveIncompressibility();
 
   void transferToCUDA();
   void transferFromCUDA();
   void integrateParticlesCUDA();
   void handleParticleCollisionCUDA();
-  void transferFromGridCUDA(VolumeGVDB &gvdb);
   void transferToGridCUDA(VolumeGVDB &gvdb);
+  void transferFromGridCUDA(VolumeGVDB &gvdb);
 
   // Simulation parameters.
   const Vector3DI gridres = Vector3DI(CELLS_X, CELLS_Y, CELLS_Z);
