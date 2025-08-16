@@ -18,6 +18,10 @@ using namespace nvdb;
 #define FUNC_TRANSFER_TO_GRID 3
 #define FUNC_MAX 4
 
+#define CELLS_X 30
+#define CELLS_Y 30
+#define CELLS_Z 30
+
 class FluidSystem {
 private:
   // Particles.
@@ -27,10 +31,21 @@ private:
   CUdeviceptr cu_vel;
 
   // Cells.
-  std::vector<std::vector<std::vector<CellType>>> celltype;
-  std::vector<std::vector<std::vector<Vector3DF>>> cellvel;
-  std::vector<std::vector<std::vector<Vector3DF>>> r;
-  std::vector<std::vector<std::vector<float>>> particleDensity;
+  static const int numcells = CELLS_X * CELLS_Y * CELLS_Z;
+  std::array<CellType, numcells> celltype{};
+  std::array<Vector3DF, numcells> cellvel{};
+  std::array<Vector3DF, numcells> r{};
+  std::array<float, numcells> particleDensity{};
+
+  inline int getCellIdx(int x, int y, int z) {
+    return x * gridres.y * gridres.z + y * gridres.z + z;
+  }
+  inline int getCellIdx(Vector3DI idx) {
+    return getCellIdx(idx.x, idx.y, idx.z);
+  }
+  inline int getCellIdx(int3 idx) {
+    return getCellIdx(idx.x, idx.y, idx.z);
+  }
 
   float particleRestDensity = 0.0f;
 
@@ -72,7 +87,7 @@ public:
   void transferToGridCUDA(VolumeGVDB &gvdb);
 
   // Simulation parameters.
-  const Vector3DI gridres = Vector3DI(30, 30, 30);
+  const Vector3DI gridres = Vector3DI(CELLS_X, CELLS_Y, CELLS_Z);
   const int solveIters = 200;
   const float overRelaxation = 1.9f;
   FluidParams fp;
