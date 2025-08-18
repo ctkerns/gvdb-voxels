@@ -225,7 +225,7 @@ bool Sample::init() {
   Camera3D *cam = new Camera3D;
   cam->setFov(50.0);
   cam->setNearFar(1, 10000);
-  cam->setOrbit(Vector3DF(7, 27, 0), Vector3DF(0, 0, 0), 200, 1.0);
+  cam->setOrbit(Vector3DF(7, 27, 0), Vector3DF(15, 15, 15), 200, 1.0);
   gvdb.getScene()->SetCamera(cam);
 
   // Default Light
@@ -253,9 +253,9 @@ bool Sample::init() {
 
   // Configure
   gvdb.Configure(3, 3, 3, 3, 3);
-  gvdb.AddChannel(0, T_FLOAT, 1, F_LINEAR);
-  gvdb.AddChannel(1, T_FLOAT3, 1); // velocity
-  gvdb.AddChannel(2, T_UCHAR, 1); // cell type
+  gvdb.AddChannel(CHAN_LEVEL_SET, T_FLOAT, 1, F_LINEAR);
+  gvdb.AddChannel(CHAN_VELOCITY, T_FLOAT3, 1); // velocity
+  gvdb.AddChannel(CHAN_CELL_TYPE, T_UCHAR, 1); // cell type
 
   // Initialize GUIs
   start_guis(m_w, m_h);
@@ -311,13 +311,6 @@ void Sample::simulate() {
   fluid.run(gvdb);
   PERF_POP();
 
-  // Test point indices.
-  // gvdb.RetrieveData(m_clr);
-  // uint *indices = (uint*) m_clr.cpu;
-  // for (int i=0; i < m_numpnts; i++) {
-  //   nvprintf("idx[%d] = %d\n", i, indices[i]);
-  // }
-
   DataPtr temp;
   gvdb.SetPoints(m_pos, m_vel, temp);
 
@@ -337,7 +330,7 @@ void Sample::simulate() {
 
   // Gather points to level set
   PERF_PUSH("Points-to-Voxels");
-  gvdb.ClearChannel(0);
+  gvdb.ClearChannel(CHAN_LEVEL_SET);
 
   int scPntLen = 0;
   int subcell_size = 4;
@@ -345,12 +338,12 @@ void Sample::simulate() {
                                 static_cast<float>(m_radius), m_origin,
                                 scPntLen);
   gvdb.GatherLevelSet_FP16(subcell_size, m_numpnts,
-                           static_cast<float>(m_radius), m_origin, scPntLen, 0,
-                           0);
-  gvdb.UpdateApron(0, 3.0f);
-  gvdb.UpdateApron(1);
-  gvdb.UpdateApron(2);
+                           static_cast<float>(m_radius), m_origin, scPntLen,
+                           CHAN_LEVEL_SET, 0);
+  gvdb.UpdateApron(CHAN_LEVEL_SET, 3.0f);
   PERF_POP();
+  gvdb.UpdateApron(CHAN_VELOCITY);
+  gvdb.UpdateApron(CHAN_LEVEL_SET);
 
   if (m_render_optix) {
     PERF_PUSH("Update OptiX");

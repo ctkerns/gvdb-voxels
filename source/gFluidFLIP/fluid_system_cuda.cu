@@ -12,7 +12,7 @@ extern "C"  __global__ void integrateParticles(float3 *pos, float3 *vel) {
     return;
 
   pos[i] += vel[i] * fp.dt;
-  vel[i] += fp.dt * fp.gravity;
+  vel[i] += fp.gravity * fp.dt;
 }
 
 __global__ void handleParticleCollision(float3 *pos, float3 *vel) {
@@ -20,25 +20,30 @@ __global__ void handleParticleCollision(float3 *pos, float3 *vel) {
   if (i > fp.numpnts)
     return;
 
-  if (pos[i].x < fp.h) {
-    pos[i].x = fp.h;
+  float min = fp.h + fp.radius;
+  float maxX = (fp.gridres.x - 1) * fp.h - fp.radius;
+  float maxY = (fp.gridres.y - 1) * fp.h - fp.radius;
+  float maxZ = (fp.gridres.z - 1) * fp.h - fp.radius;
+
+  if (pos[i].x < min) {
+    pos[i].x = min;
     vel[i].x = 0.0f;
-  } else if (pos[i].x >= (fp.gridres.x - 1) * fp.h) {
-    pos[i].x = (fp.gridres.x - 1) * fp.h - 0.001f;
+  } else if (pos[i].x >= maxX) {
+    pos[i].x = maxX;
     vel[i].x = 0.0f;
   }
-  if (pos[i].y < fp.h) {
-    pos[i].y = fp.h;
+  if (pos[i].y < min) {
+    pos[i].y = min;
     vel[i].y = 0.0f;
-  } else if (pos[i].y >= (fp.gridres.y - 1) * fp.h) {
-    pos[i].y = (fp.gridres.y - 1) * fp.h - 0.001f;
+  } else if (pos[i].y >= maxY) {
+    pos[i].y = maxY;
     vel[i].y = 0.0f;
   }
-  if (pos[i].z < fp.h) {
-    pos[i].z = fp.h;
+  if (pos[i].z < min) {
+    pos[i].z = min;
     vel[i].z = 0.0f;
-  } else if (pos[i].z >= (fp.gridres.z - 1) * fp.h) {
-    pos[i].z = (fp.gridres.z - 1) * fp.h - 0.001f;
+  } else if (pos[i].z >= maxZ) {
+    pos[i].z = maxZ;
     vel[i].z = 0.0f;
   }
 }
@@ -59,6 +64,7 @@ __global__ void transferToGrid(VDBInfo *gvdb, int num_sc, Component component,
 
   for (int j = 0; j < sc_cnt[sc_id]; j++) {
     float3 ppos = sc_pnt_pos[sc_off[sc_id] + j];
+    ppos = offsetGrid(fp, ppos, component);
 
     // Only take into account particles within this cell.
     if (ppos.x >= wpos.x - 1 && ppos.x < wpos.x + 1 &&
@@ -80,18 +86,18 @@ __global__ void transferToGrid(VDBInfo *gvdb, int num_sc, Component component,
     break;
   case Component::Y:
     val = make_float3(0.0f, val.y, 0.0f);
-    val += fxyz(surf3Dread<float4>(gvdb->volOut[1], vox.x * sizeof(float4),
-                                  vox.y, vox.z));
+    val += fxyz(surf3Dread<float4>(gvdb->volOut[CHAN_VELOCITY],
+                                   vox.x * sizeof(float4), vox.y, vox.z));
     break;
   case Component::Z:
     val = make_float3(0.0f, 0.0f, val.z);
-    val += fxyz(surf3Dread<float4>(gvdb->volOut[1], vox.x * sizeof(float4),
-                                  vox.y, vox.z));
+    val += fxyz(surf3Dread<float4>(gvdb->volOut[CHAN_VELOCITY],
+                                   vox.x * sizeof(float4), vox.y, vox.z));
     break;
   }
 
-  surf3Dwrite(make_float4(val), gvdb->volOut[1], vox.x * sizeof(float4), vox.y,
-              vox.z);
+  surf3Dwrite(make_float4(val), gvdb->volOut[CHAN_VELOCITY],
+              vox.x * sizeof(float4), vox.y, vox.z);
 }
 
 __global__ void transferFromGrid(VDBInfo *gvdb, int num_sc, Component component,
@@ -111,7 +117,9 @@ __global__ void transferFromGrid(VDBInfo *gvdb, int num_sc, Component component,
   // Velocities from each corner.
   float3 gridvel[8];
   for (int i = 0; i < 8; i++) {
-    gridvel[i] = fxyz(surf3Dread<float4>(gvdb->volOut[1], cell[i].x * sizeof(float4), cell[i].y, cell[i].z));
+    gridvel[i] = fxyz(surf3Dread<float4>(gvdb->volOut[CHAN_VELOCITY],
+                                         cell[i].x * sizeof(float4), cell[i].y,
+                                         cell[i].z));
   }
 
   int3 offset =
@@ -120,9 +128,11 @@ __global__ void transferFromGrid(VDBInfo *gvdb, int num_sc, Component component,
 
   bool valid[8];
   for (int i = 0; i < 8; i++) {
-    CellType c1 = (CellType)surf3Dread<uchar>(gvdb->volOut[2], cell[i].x * sizeof(uchar), cell[i].y, cell[i].z);
+    CellType c1 = (CellType)surf3Dread<uchar>(gvdb->volOut[CHAN_CELL_TYPE],
+                                              cell[i].x * sizeof(uchar),
+                                              cell[i].y, cell[i].z);
     CellType c2 = (CellType)surf3Dread<uchar>(
-        gvdb->volOut[2], (cell[i].x - offset.x) * sizeof(uchar),
+        gvdb->volOut[CHAN_CELL_TYPE], (cell[i].x - offset.x) * sizeof(uchar),
         cell[i].y - offset.y, cell[i].z - offset.z);
     // valid[i] = !(c1 == CellType::Air && c2 == CellType::Air);
     // TODO: Temp until we start using cell types.
@@ -131,6 +141,7 @@ __global__ void transferFromGrid(VDBInfo *gvdb, int num_sc, Component component,
 
   for (int j = 0; j < sc_cnt[sc_id]; j++) {
     float3 ppos = sc_pnt_pos[sc_off[sc_id] + j];
+    ppos = offsetGrid(fp, ppos, component);
     uint idx = sc_pnt_clr[sc_off[sc_id] + j];
 
     // Only take into account particles within this cell.

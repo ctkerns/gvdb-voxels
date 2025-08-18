@@ -3,6 +3,7 @@
 #include <cuda.h>	
 
 #include "fluid_system.h"
+#include "fluid_params.h"
 #include "fluid_utils.h"
 
 bool cuCheck (CUresult launch_stat, char* method, char* apicall, char* arg, bool bDebug)
@@ -39,15 +40,22 @@ bool cuCheck (CUresult launch_stat, char* method, char* apicall, char* arg, bool
 	return true;
 }
 
+Vector3DF lerp3(Vector3DF v1, Vector3DF v2, Vector3DF t) {
+  return v1 * (Vector3DF(1.0f, 1.0f, 1.0f) - t) + v2 * t;
+}
+
 FluidSystem::FluidSystem() {
 	for (int n=0; n < FUNC_MAX; n++ ) m_Func[n] = (CUfunction) -1;
 
-  fp.gridres = make_int3(30, 30, 30);
-  fp.h = 1.0f;
-  // fp.dt = 1.0f / (3.0f * 60.0f);
-  fp.dt = 1.0f / 32.0f;
+  fp.gridres = make_int3(CELLS_X, CELLS_Y, CELLS_Z); // TODO: Why do we have to
+                                                     // define here again?
+  fp.h = 1.0;
+  fp.dt = 1.0f / (6.0f * 30.0f);
   fp.gravity = make_float3(0.0f, -9.8f, 0.0f);
-  fp.numpnts = (fp.gridres.x - 2) * (fp.gridres.y - 2) * (fp.gridres.z - 2);
+  fp.gravity *= 30.0f; // Unit scale.
+  fp.numpnts = (fp.gridres.x) * (fp.gridres.y) * (fp.gridres.z);
+  fp.density = 1000.0f;
+  fp.radius = 0.01f;
 
   numThreads = (fp.numpnts < threadsPerBlock) ? fp.numpnts : threadsPerBlock;
   numBlocks = (fp.numpnts % numThreads != 0) ? (fp.numpnts / numThreads + 1)
@@ -70,15 +78,6 @@ void FluidSystem::setup() {
           "FluidSystem::setup", "cuModuleLoad", "fluid_system_cuda.ptx",
           mbDebug);
 
-  // Initialize particles
-  cuCheck(cuMemAlloc(&cu_pos, sizeof(Vector3DF)*fp.numpnts), "FluidSystem::setup",
-          "cuMemAlloc", "cu_pos", mbDebug);
-  cuCheck(cuMemAlloc(&cu_vel, sizeof(Vector3DF)*fp.numpnts), "FluidSystem::setup",
-          "cuMemAlloc", "cu_vel", mbDebug);
-
-  pos = std::vector<Vector3DF>(fp.numpnts);
-  vel = std::vector<Vector3DF>(fp.numpnts, Vector3DF(0.0f, 0.0f, 0.0f));
-
   // Load parameters.
   size_t len = 0;
   cuCheck(cuModuleGetGlobal(&cu_fp, &len, m_Module, "fp"),
@@ -92,17 +91,39 @@ void FluidSystem::setup() {
   LoadKernel(FUNC_TRANSFER_FROM_GRID, "transferFromGrid");
   LoadKernel(FUNC_TRANSFER_TO_GRID, "transferToGrid");
 
-  int p = 0;
-  for (int i = 1; i < fp.gridres.x - 1; i++) {
-    for (int j = 1; j < fp.gridres.y - 1; j++) {
-      for (int k = 1; k < fp.gridres.z - 1; k++) {
-        pos[p++] = Vector3DF((i + fp.gridres.x)/2.0f, (j + fp.gridres.x)/2.0f, (k + fp.gridres.x)/2.0f)*fp.h;
-        // pos[p++] = Vector3DF(i, j, k)*fp.h;
+  // Initialize particles
+  cuCheck(cuMemAlloc(&cu_pos, sizeof(Vector3DF)*fp.numpnts), "FluidSystem::setup",
+          "cuMemAlloc", "cu_pos", mbDebug);
+  cuCheck(cuMemAlloc(&cu_vel, sizeof(Vector3DF)*fp.numpnts), "FluidSystem::setup",
+          "cuMemAlloc", "cu_vel", mbDebug);
+
+  pos = std::vector<Vector3DF>(fp.numpnts);
+  vel = std::vector<Vector3DF>(fp.numpnts, Vector3DF(0.0f, 0.0f, 0.0f));
+
+  Vector3DF minlerp(0.3f, 0.3f, 0.3f); // Adjust these to configure starting
+  Vector3DF maxlerp(0.9f, 0.9f, 0.9f); // fluid.
+
+  Vector3DF tankmin(fp.h + fp.radius, fp.h + fp.radius, fp.h + fp.radius);
+  Vector3DF tankmax((fp.gridres.x - 1) * fp.h - fp.radius,
+                    (fp.gridres.y - 1) * fp.h - fp.radius,
+                    (fp.gridres.z - 1) * fp.h - fp.radius);
+  Vector3DF fluidmin = lerp3(tankmin, tankmax, minlerp);
+  Vector3DF fluidmax = lerp3(tankmin, tankmax, maxlerp);
+  int point = 0;
+  for (int i = 0; i < fp.gridres.x; i++) {
+    for (int j = 0; j < fp.gridres.y; j++) {
+      for (int k = 0; k < fp.gridres.z; k++) {
+        Vector3DF lerp(float(i) / (fp.gridres.x - 1),
+                       float(j) / (fp.gridres.y - 1),
+                       float(k) / (fp.gridres.z - 1));
+        pos[point++] = lerp3(fluidmin, fluidmax, lerp);
       }
     }
   }
 
   // Initialize cells.
+  p.resize(numcells);
+  p_tmp.resize(numcells);
   for (int i = 0; i < fp.gridres.x; i++) {
     for (int j = 0; j < fp.gridres.y; j++) {
       for (int k = 0; k < fp.gridres.z; k++) {
@@ -117,55 +138,63 @@ void FluidSystem::setup() {
 
 void FluidSystem::run(VolumeGVDB &gvdb) {
   transferToCUDA();
-  // integrateParticles();
-  // handleParticleCollision();
 
+#ifdef CPU_SIM
+  integrateParticles();
+  handleParticleCollision();
+  transferToGrid();
+  updateCells();
+#ifdef COMPENSATE_DRIFT
+  updateParticleDensity();
+#endif
+  computeDivergence();
+  solveJacobi();
+  applyPressure();
+  transferFromGrid();
+#else // GPU_SIM
   integrateParticlesCUDA();
   handleParticleCollisionCUDA();
-
   transferToGridCUDA(gvdb);
   transferFromGridCUDA(gvdb);
   cuCtxSynchronize();
-
   transferFromCUDA();
-
-  clearCells();
-  transferToGrid();
-  updateParticleDensity();
-  solveIncompressibility();
-  transferFromGrid();
+#endif
 }
 
 // Apply gravity and velocity.
 void FluidSystem::integrateParticles() {
   for (int i = 0; i < pos.size(); i++) {
     pos[i] += vel[i] * fp.dt;
-    vel[i] += *(Vector3DF*)(&fp.gravity) * fp.dt;
   }
 }
 
 // Make sure particles do not escape boundary.
 void FluidSystem::handleParticleCollision() {
+  float min = fp.h + fp.radius;
+  float maxX = (fp.gridres.x - 1) * fp.h - fp.radius;
+  float maxY = (fp.gridres.y - 1) * fp.h - fp.radius;
+  float maxZ = (fp.gridres.z - 1) * fp.h - fp.radius;
+
   for (int i = 0; i < pos.size(); i++) {
-    if (pos[i].x < fp.h) {
-      pos[i].x = fp.h;
+    if (pos[i].x < min) {
+      pos[i].x = min;
       vel[i].x = 0.0f;
-    } else if (pos[i].x >= (fp.gridres.x - 1) * fp.h) {
-      pos[i].x = (fp.gridres.x - 1) * fp.h - 0.001f;
+    } else if (pos[i].x >= maxX) {
+      pos[i].x = maxX;
       vel[i].x = 0.0f;
     }
-    if (pos[i].y < fp.h) {
-      pos[i].y = fp.h;
+    if (pos[i].y < min) {
+      pos[i].y = min;
       vel[i].y = 0.0f;
-    } else if (pos[i].y >= (fp.gridres.y - 1) * fp.h) {
-      pos[i].y = (fp.gridres.y - 1) * fp.h - 0.001f;
+    } else if (pos[i].y >= maxY) {
+      pos[i].y = maxY;
       vel[i].y = 0.0f;
     }
-    if (pos[i].z < fp.h) {
-      pos[i].z = fp.h;
+    if (pos[i].z < min) {
+      pos[i].z = min;
       vel[i].z = 0.0f;
-    } else if (pos[i].z >= (fp.gridres.z - 1) * fp.h) {
-      pos[i].z = (fp.gridres.z - 1) * fp.h - 0.001f;
+    } else if (pos[i].z >= maxZ) {
+      pos[i].z = maxZ;
       vel[i].z = 0.0f;
     }
   }
@@ -217,7 +246,8 @@ float FluidSystem::addVelocityFromParticle(Vector3DF pos, Vector3DF vel,
                 component == Component::Z);
 
   int3 cellIndices[8];
-  getNeighborCellIndices(*(int3*)(&cellidx), cellIndices);
+  getNeighborCellIndices(make_int3(cellidx.x, cellidx.y, cellidx.z),
+                         cellIndices);
 
   const int max = 8;
   for (int i=0; i < max; i++) {
@@ -226,21 +256,16 @@ float FluidSystem::addVelocityFromParticle(Vector3DF pos, Vector3DF vel,
   }
 }
 
-// Transfer velocities from grid to particle.
-void FluidSystem::transferFromGrid() {
-  for (int i = 0; i < pos.size(); i++) {
-    vel[i] = getVelocityFromGrid(pos[i], Component::X) +
-             getVelocityFromGrid(pos[i], Component::Y) +
-             getVelocityFromGrid(pos[i], Component::Z);
-  }
-}
-
 // Transfer velocities from particle to grid.
 void FluidSystem::transferToGrid() {
-  // Clear all grid velocities.
+  // Clear the grid.
   for (int i = 0; i < numcells; i++) {
     cellvel[i] = Vector3DF(0.0f, 0.0f, 0.0f);
     r[i] = Vector3DF(0.0f, 0.0f, 0.0f);
+    p[i] = 0.0f;
+    if (celltype[i] == CellType::Fluid) {
+      celltype[i] = CellType::Air;
+    }
   }
 
   for (int i = 0; i < pos.size(); i++) {
@@ -259,10 +284,35 @@ void FluidSystem::transferToGrid() {
   }
 }
   
-void FluidSystem::clearCells() {
-  for (int i = 0; i < numcells; i++) {
-    if (celltype[i] == CellType::Fluid) {
-      celltype[i] = CellType::Air;
+// Transfer velocities from grid to particle.
+void FluidSystem::transferFromGrid() {
+  for (int i = 0; i < pos.size(); i++) {
+    vel[i] = getVelocityFromGrid(pos[i], Component::X) +
+             getVelocityFromGrid(pos[i], Component::Y) +
+             getVelocityFromGrid(pos[i], Component::Z);
+  }
+}
+
+void FluidSystem::updateCells() {
+  // Apply gravity and boundary conditions.
+  for (int i = 1; i < fp.gridres.x - 1; i++) {
+    for (int j = 1; j < fp.gridres.y - 1; j++) {
+      for (int k = 1; k < fp.gridres.z - 1; k++) {
+        bool solidNeighbor =
+            celltype[getCellIdx(i - 1, j, k)] == CellType::Solid ||
+            celltype[getCellIdx(i + 1, j, k)] == CellType::Solid ||
+            celltype[getCellIdx(i, j - 1, k)] == CellType::Solid ||
+            celltype[getCellIdx(i, j + 1, k)] == CellType::Solid ||
+            celltype[getCellIdx(i, j, k - 1)] == CellType::Solid ||
+            celltype[getCellIdx(i, j, k + 1)] == CellType::Solid;
+
+        if (solidNeighbor)
+          cellvel[getCellIdx(i, j, k)] = Vector3DF(0.0f, 0.0f, 0.0f);
+        else {
+          cellvel[getCellIdx(i, j, k)] +=
+              Vector3DF(fp.gravity.x, fp.gravity.y, fp.gravity.z) * fp.dt;
+        }
+      }
     }
   }
 
@@ -291,7 +341,7 @@ void FluidSystem::updateParticleDensity() {
     getCellWeights(pposc, w);
 
     int3 cellIndices[8];
-    getNeighborCellIndices(*(int3*)(&cellidx), cellIndices);
+    getNeighborCellIndices(make_int3(cellidx.x, cellidx.y, cellidx.z), cellIndices);
     for (int i=0; i < 8; i++) {
       particleDensity[getCellIdx(cellIndices[i])] += w[i];
     }
@@ -315,8 +365,50 @@ void FluidSystem::updateParticleDensity() {
   }
 }
 
-void FluidSystem::solveIncompressibility() {
+void FluidSystem::computeDivergence() {
   float maxDiv = 0.0f;
+  for (int i = 1; i < fp.gridres.x - 1; i++) {
+    for (int j = 1; j < fp.gridres.y - 1; j++) {
+      for (int k = 1; k < fp.gridres.z - 1; k++) {
+        if (celltype[getCellIdx(i, j, k)] != CellType::Fluid) continue;
+
+        float div = (cellvel[getCellIdx(i + 1, j, k)].x -
+                     cellvel[getCellIdx(i, j, k)].x +
+                     cellvel[getCellIdx(i, j + 1, k)].y -
+                     cellvel[getCellIdx(i, j, k)].y +
+                     cellvel[getCellIdx(i, j, k + 1)].z -
+                     cellvel[getCellIdx(i, j, k)].z) /
+                    fp.h;
+
+        // Compensate drift.
+#ifdef COMPENSATE_DRIFT
+        if (particleRestDensity > 0.0f) {
+          float compression =
+              particleDensity[getCellIdx(i, j, k)] - particleRestDensity;
+
+          if (compression > 0.0f) {
+            float k = 1.0f;
+            div = div - k * compression;
+          }
+        }
+#endif
+
+        divergence[getCellIdx(i, j, k)] = div;
+
+        // Calculate max divergence for debugging.
+        if (div > maxDiv) maxDiv = div;
+      }
+    }
+  }
+
+  nvprintf("Max divergence: %f\n", maxDiv);
+}
+
+void FluidSystem::solveGaussSeidel() {
+  float c = fp.density / fp.dt;
+  float h_sq = fp.h * fp.h;
+
+  float maxResidual = 0.0f;
   for (int iter = 0; iter < solveIters; iter++) {
     for (int i = 1; i < fp.gridres.x - 1; i++) {
       for (int j = 1; j < fp.gridres.y - 1; j++) {
@@ -333,41 +425,99 @@ void FluidSystem::solveIncompressibility() {
 
           if (s_sum == 0.0f) continue;
 
-          float div = cellvel[getCellIdx(i + 1, j, k)].x -
-                      cellvel[getCellIdx(i, j, k)].x +
-                      cellvel[getCellIdx(i, j + 1, k)].y -
-                      cellvel[getCellIdx(i, j, k)].y +
-                      cellvel[getCellIdx(i, j, k + 1)].z -
-                      cellvel[getCellIdx(i, j, k)].z;
+          float div = divergence[getCellIdx(i, j, k)];
 
-          if (particleRestDensity > 0.0f) {
-            float compression = particleDensity[getCellIdx(i, j, k)] - particleRestDensity;
+          // Accumulate neighbor cells pressures.
+          float p_sum = 0.0f;
+          p_sum += p[getCellIdx(i - 1, j, k)];
+          p_sum += p[getCellIdx(i + 1, j, k)];
+          p_sum += p[getCellIdx(i, j - 1, k)];
+          p_sum += p[getCellIdx(i, j + 1, k)];
+          p_sum += p[getCellIdx(i, j, k - 1)];
+          p_sum += p[getCellIdx(i, j, k + 1)];
 
-            if (compression > 0.0f) {
-              float k = 1.0f;
-              div = div - k * compression;
-            }
-          }
-          
-          float p_val = (-div / s_sum) * overRelaxation;
-          cellvel[getCellIdx(i, j, k)].x -= sx0 * p_val;
-          cellvel[getCellIdx(i, j, k)].y -= sy0 * p_val;
-          cellvel[getCellIdx(i, j, k)].z -= sz0 * p_val;
-          cellvel[getCellIdx(i + 1, j, k)].x += sx1 * p_val;
-          cellvel[getCellIdx(i, j + 1, k)].y += sy1 * p_val;
-          cellvel[getCellIdx(i, j, k + 1)].z += sz1 * p_val;
+          float newval = (p_sum - (h_sq * c) * div) / s_sum;
+          p[getCellIdx(i, j, k)] = (1.0f - overRelaxation) * p[getCellIdx(i, j, k)] + overRelaxation * newval;
 
+          // Calculate max residual for debugging.
           if (iter == solveIters - 1) {
-            if (div > maxDiv) {
-              maxDiv = div;
-            }
+            float r = -c * div - (s_sum * p[getCellIdx(i, j, k)] - p_sum) / (h_sq);
+            if (abs(r) > maxResidual) maxResidual = abs(r);
           }
         }
       }
     }
   }
 
-  nvprintf("\n%f\n", maxDiv);
+  nvprintf("Max residual: %f\n", maxResidual);
+}
+
+void FluidSystem::solveJacobi() {
+  float c = fp.density / fp.dt;
+  float h_sq = fp.h * fp.h;
+
+  for (int iter = 0; iter < solveIters; iter++) {
+    for (int i = 1; i < fp.gridres.x - 1; i++) {
+      for (int j = 1; j < fp.gridres.y - 1; j++) {
+        for (int k = 1; k < fp.gridres.z - 1; k++) {
+          if (celltype[getCellIdx(i, j, k)] != CellType::Fluid) {
+            p_tmp[getCellIdx(i, j, k)] = 0.0f;
+            continue;
+          }
+
+          float sx0 = (float) celltype[getCellIdx(i - 1, j, k)] != CellType::Solid; 
+          float sx1 = (float) celltype[getCellIdx(i + 1, j, k)] != CellType::Solid; 
+          float sy0 = (float) celltype[getCellIdx(i, j - 1, k)] != CellType::Solid; 
+          float sy1 = (float) celltype[getCellIdx(i, j + 1, k)] != CellType::Solid; 
+          float sz0 = (float) celltype[getCellIdx(i, j, k - 1)] != CellType::Solid; 
+          float sz1 = (float) celltype[getCellIdx(i, j, k + 1)] != CellType::Solid; 
+          float s_sum = sx0 + sx1 + sy0 + sy1 + sz0 + sz1;
+
+          if (s_sum == 0.0f) continue;
+
+          float div = divergence[getCellIdx(i, j, k)];
+
+          // Accumulate neighbor cells pressures.
+          float p_sum = 0.0f;
+          p_sum += p[getCellIdx(i - 1, j, k)];
+          p_sum += p[getCellIdx(i + 1, j, k)];
+          p_sum += p[getCellIdx(i, j - 1, k)];
+          p_sum += p[getCellIdx(i, j + 1, k)];
+          p_sum += p[getCellIdx(i, j, k - 1)];
+          p_sum += p[getCellIdx(i, j, k + 1)];
+
+          p_tmp[getCellIdx(i, j, k)] = (p_sum - (h_sq * c) * div) / s_sum;
+        }
+      }
+    }
+    p_tmp.swap(p);
+  } 
+}
+
+void FluidSystem::applyPressure() {
+  float dt_div_rho_0_h = fp.dt / (fp.density * fp.h);
+
+  for (int i = 1; i < fp.gridres.x - 1; i++) {
+    for (int j = 1; j < fp.gridres.y - 1; j++) {
+      for (int k = 1; k < fp.gridres.z - 1; k++) {
+        if (celltype[getCellIdx(i - 1, j, k)] == CellType::Solid || celltype[getCellIdx(i, j, k)] == CellType::Solid) {
+          cellvel[getCellIdx(i, j, k)].x = 0.0f;
+        } else {
+          cellvel[getCellIdx(i, j, k)].x -= dt_div_rho_0_h * (p[getCellIdx(i, j, k)] - p[getCellIdx(i - 1, j, k)]);
+        }
+        if (celltype[getCellIdx(i, j - 1, k)] == CellType::Solid || celltype[getCellIdx(i, j, k)] == CellType::Solid) {
+          cellvel[getCellIdx(i, j, k)].y = 0.0f;
+        } else {
+          cellvel[getCellIdx(i, j, k)].y -= dt_div_rho_0_h * (p[getCellIdx(i, j, k)] - p[getCellIdx(i, j - 1, k)]);
+        }
+        if (celltype[getCellIdx(i, j, k - 1)] == CellType::Solid || celltype[getCellIdx(i, j, k)] == CellType::Solid) {
+          cellvel[getCellIdx(i, j, k)].z = 0.0f;
+        } else {
+          cellvel[getCellIdx(i, j, k)].z -= dt_div_rho_0_h * (p[getCellIdx(i, j, k)] - p[getCellIdx(i, j, k - 1)]);
+        }
+      }
+    }
+  }
 }
 
 void FluidSystem::transferToCUDA() {
@@ -403,10 +553,12 @@ void FluidSystem::transferToGridCUDA(VolumeGVDB &gvdb) {
 
   CUdeviceptr cuVDBInfo = gvdb.getCUVDBInfo();
   int numSCell = static_cast<int>(pow(gvdb.getRes(0) / subcell, 3)) * num_brick;
-  Component component;
   int pntlen = 0;
-  float radius = 1.0f;
+  float radius = 0.5f;
+  gvdb.InsertPointsSubcell(subcell, fp.numpnts, radius,
+                           Vector3DF(0.0f, 0.0f, 0.0f), pntlen);
 
+  Component component;
   void *args[9] = {&cuVDBInfo,
                     &numSCell,
                     &component,
@@ -417,32 +569,26 @@ void FluidSystem::transferToGridCUDA(VolumeGVDB &gvdb) {
                     &gvdb.getAux(AUX_SUBCELL_PNT_POS).gpu,
                     &gvdb.getAux(AUX_SUBCELL_PNT_VEL).gpu};
 
-  gvdb.ClearChannel(1);
+  gvdb.ClearChannel(CHAN_VELOCITY);
 
   component = Component::X;
-  gvdb.InsertPointsSubcell(subcell, fp.numpnts, radius,
-                           Vector3DF(0.0f, -0.5f, -0.5f), pntlen);
   cuCheck(
       cuLaunchKernel(m_Func[FUNC_TRANSFER_TO_GRID], numSCell, 1, 1,
                      subcell, subcell, subcell, 0, NULL, args, NULL),
       "transferToGridCUDA", "cuLaunch", "FUNC_TRANSFER_TO_GRID", mbDebug);
 
   component = Component::Y;
-  gvdb.InsertPointsSubcell(subcell, fp.numpnts, radius,
-                           Vector3DF(-0.5f, 0.0f, -0.5f), pntlen);
   cuCheck(
       cuLaunchKernel(m_Func[FUNC_TRANSFER_TO_GRID], numSCell, 1, 1,
                      subcell, subcell, subcell, 0, NULL, args, NULL),
       "transferToGridCUDA", "cuLaunch", "FUNC_TRANSFER_TO_GRID", mbDebug);
 
   component = Component::Z;
-  gvdb.InsertPointsSubcell(subcell, fp.numpnts, radius,
-                           Vector3DF(-0.5f, -0.5f, 0.0f), pntlen);
   cuCheck(
       cuLaunchKernel(m_Func[FUNC_TRANSFER_TO_GRID], numSCell, 1, 1,
                      subcell, subcell, subcell, 0, NULL, args, NULL),
       "transferToGridCUDA", "cuLaunch", "FUNC_TRANSFER_TO_GRID", mbDebug);
-  gvdb.UpdateApron(1);
+  gvdb.UpdateApron(CHAN_VELOCITY);
 }
 
 void FluidSystem::transferFromGridCUDA(VolumeGVDB &gvdb) {
@@ -466,24 +612,18 @@ void FluidSystem::transferFromGridCUDA(VolumeGVDB &gvdb) {
                     &gvdb.getAux(AUX_PNTVEL).gpu};
 
   component = Component::X;
-  gvdb.InsertPointsSubcell(subcell, fp.numpnts, 0.0f,
-                           Vector3DF(0.0f, -0.5f, -0.5f), pntlen);
   cuCheck(
       cuLaunchKernel(m_Func[FUNC_TRANSFER_FROM_GRID], numSCell, 1, 1,
                      subcell, subcell, subcell, 0, NULL, args, NULL),
       "transferFromGridCUDA", "cuLaunch", "FUNC_TRANSFER_FROM_GRID", mbDebug);
 
   component = Component::Y;
-  gvdb.InsertPointsSubcell(subcell, fp.numpnts, 0.0f,
-                           Vector3DF(-0.5f, 0.0f, -0.5f), pntlen);
   cuCheck(
       cuLaunchKernel(m_Func[FUNC_TRANSFER_FROM_GRID], numSCell, 1, 1,
                      subcell, subcell, subcell, 0, NULL, args, NULL),
       "transferFromGridCUDA", "cuLaunch", "FUNC_TRANSFER_FROM_GRID", mbDebug);
 
   component = Component::Z;
-  gvdb.InsertPointsSubcell(subcell, fp.numpnts, 0.0f,
-                           Vector3DF(-0.5f, -0.5f, 0.0f), pntlen);
   cuCheck(
       cuLaunchKernel(m_Func[FUNC_TRANSFER_FROM_GRID], numSCell, 1, 1,
                      subcell, subcell, subcell, 0, NULL, args, NULL),

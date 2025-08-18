@@ -18,9 +18,12 @@ using namespace nvdb;
 #define FUNC_TRANSFER_TO_GRID 3
 #define FUNC_MAX 4
 
+#define CPU_SIM
+// #define COMPENSATE_DRIFT
+
 #define CELLS_X 30
 #define CELLS_Y 30
-#define CELLS_Z 30
+#define CELLS_Z 30 
 
 class FluidSystem {
 private:
@@ -32,10 +35,13 @@ private:
 
   // Cells.
   static const int numcells = CELLS_X * CELLS_Y * CELLS_Z;
-  std::array<CellType, numcells> celltype{};
-  std::array<Vector3DF, numcells> cellvel{};
-  std::array<Vector3DF, numcells> r{};
-  std::array<float, numcells> particleDensity{};
+  std::array<CellType, numcells> celltype; // TODO: Don't leave some uninit.
+  std::array<Vector3DF, numcells> cellvel;
+  std::array<Vector3DF, numcells> r;
+  std::array<float, numcells> particleDensity;
+  std::array<float, numcells> divergence;
+  std::vector<float> p;
+  std::vector<float> p_tmp;
 
   inline int getCellIdx(int x, int y, int z) {
     return x * gridres.y * gridres.z + y * gridres.z + z;
@@ -75,9 +81,12 @@ public:
   Vector3DF getVelocityFromGrid(Vector3DF pos, Component component);
   void transferToGrid();
   void transferFromGrid();
-  void clearCells();
+  void updateCells();
   void updateParticleDensity();
-  void solveIncompressibility();
+  void computeDivergence();
+  void solveGaussSeidel();
+  void solveJacobi();
+  void applyPressure();
 
   void transferToCUDA();
   void transferFromCUDA();
