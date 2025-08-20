@@ -50,7 +50,7 @@ FluidSystem::FluidSystem() {
   fp.gridres = make_int3(CELLS_X, CELLS_Y, CELLS_Z); // TODO: Why do we have to
                                                      // define here again?
   fp.h = 1.0;
-  fp.dt = 1.0f / (6.0f * 30.0f);
+  fp.dt = 1.0f / (12.0f * 30.0f);
   fp.gravity = make_float3(0.0f, -9.8f, 0.0f);
   fp.gravity *= 30.0f; // Unit scale.
   fp.numpnts = (fp.gridres.x) * (fp.gridres.y) * (fp.gridres.z);
@@ -90,6 +90,11 @@ void FluidSystem::setup() {
   LoadKernel(FUNC_HANDLE_COLLISION, "handleParticleCollision");
   LoadKernel(FUNC_TRANSFER_FROM_GRID, "transferFromGrid");
   LoadKernel(FUNC_TRANSFER_TO_GRID, "transferToGrid");
+  LoadKernel(FUNC_APPLY_GRAVITY, "applyGravity");
+  LoadKernel(FUNC_MARK_CELLS, "markCells");
+  LoadKernel(FUNC_COMPUTE_DIVERGENCE, "computeDivergence");
+  LoadKernel(FUNC_SOLVE_JACOBI, "solveJacobi");
+  LoadKernel(FUNC_APPLY_PRESSURE, "applyPressure");
 
   // Initialize particles
   cuCheck(cuMemAlloc(&cu_pos, sizeof(Vector3DF)*fp.numpnts), "FluidSystem::setup",
@@ -100,8 +105,8 @@ void FluidSystem::setup() {
   pos = std::vector<Vector3DF>(fp.numpnts);
   vel = std::vector<Vector3DF>(fp.numpnts, Vector3DF(0.0f, 0.0f, 0.0f));
 
-  Vector3DF minlerp(0.3f, 0.3f, 0.3f); // Adjust these to configure starting
-  Vector3DF maxlerp(0.9f, 0.9f, 0.9f); // fluid.
+  Vector3DF minlerp(0.2f, 0.4f, 0.2f); // Adjust these to configure starting
+  Vector3DF maxlerp(1.0f, 1.0f, 1.0f); // fluid.
 
   Vector3DF tankmin(fp.h + fp.radius, fp.h + fp.radius, fp.h + fp.radius);
   Vector3DF tankmax((fp.gridres.x - 1) * fp.h - fp.radius,
@@ -155,9 +160,14 @@ void FluidSystem::run(VolumeGVDB &gvdb) {
   integrateParticlesCUDA();
   handleParticleCollisionCUDA();
   transferToGridCUDA(gvdb);
+  updateCellsCUDA(gvdb);
+  computeDivergenceCUDA(gvdb);
+  solveJacobiCUDA(gvdb);
+  applyPressureCUDA(gvdb);
   transferFromGridCUDA(gvdb);
+
   cuCtxSynchronize();
-  transferFromCUDA();
+  transferFromCUDA(); // CPU readback. TODO: Can we avoid this?
 #endif
 }
 
@@ -298,25 +308,29 @@ void FluidSystem::updateCells() {
   for (int i = 1; i < fp.gridres.x - 1; i++) {
     for (int j = 1; j < fp.gridres.y - 1; j++) {
       for (int k = 1; k < fp.gridres.z - 1; k++) {
-        bool solidNeighbor =
-            celltype[getCellIdx(i - 1, j, k)] == CellType::Solid ||
-            celltype[getCellIdx(i + 1, j, k)] == CellType::Solid ||
-            celltype[getCellIdx(i, j - 1, k)] == CellType::Solid ||
-            celltype[getCellIdx(i, j + 1, k)] == CellType::Solid ||
-            celltype[getCellIdx(i, j, k - 1)] == CellType::Solid ||
-            celltype[getCellIdx(i, j, k + 1)] == CellType::Solid;
-
-        if (solidNeighbor)
-          cellvel[getCellIdx(i, j, k)] = Vector3DF(0.0f, 0.0f, 0.0f);
-        else {
-          cellvel[getCellIdx(i, j, k)] +=
-              Vector3DF(fp.gravity.x, fp.gravity.y, fp.gravity.z) * fp.dt;
+        if (celltype[getCellIdx(i - 1, j, k)] == CellType::Solid ||
+            celltype[getCellIdx(i, j, k)] == CellType::Solid) {
+          cellvel[getCellIdx(i, j, k)].x = 0.0f;
+        } else {
+          cellvel[getCellIdx(i, j, k)].x += fp.gravity.x * fp.dt;
+        }
+        if (celltype[getCellIdx(i, j - 1, k)] == CellType::Solid ||
+            celltype[getCellIdx(i, j, k)] == CellType::Solid) {
+          cellvel[getCellIdx(i, j, k)].y = 0.0f;
+        } else {
+          cellvel[getCellIdx(i, j, k)].y += fp.gravity.y * fp.dt;
+        }
+        if (celltype[getCellIdx(i, j, k - 1)] == CellType::Solid ||
+            celltype[getCellIdx(i, j, k)] == CellType::Solid) {
+          cellvel[getCellIdx(i, j, k)].z = 0.0f;
+        } else {
+          cellvel[getCellIdx(i, j, k)].z += fp.gravity.z * fp.dt;
         }
       }
     }
   }
 
-  // Set cells with particles to fluid cells.
+  // Mark cells with particles as fluid cells.
   for (int i = 0; i < pos.size(); i++) {
     Vector3DI cellidx = pos[i] / fp.h;
 
@@ -465,19 +479,25 @@ void FluidSystem::solveJacobi() {
             continue;
           }
 
-          float sx0 = (float) celltype[getCellIdx(i - 1, j, k)] != CellType::Solid; 
-          float sx1 = (float) celltype[getCellIdx(i + 1, j, k)] != CellType::Solid; 
-          float sy0 = (float) celltype[getCellIdx(i, j - 1, k)] != CellType::Solid; 
-          float sy1 = (float) celltype[getCellIdx(i, j + 1, k)] != CellType::Solid; 
-          float sz0 = (float) celltype[getCellIdx(i, j, k - 1)] != CellType::Solid; 
-          float sz1 = (float) celltype[getCellIdx(i, j, k + 1)] != CellType::Solid; 
+          float sx0 =
+              (float)celltype[getCellIdx(i - 1, j, k)] != CellType::Solid;
+          float sx1 =
+              (float)celltype[getCellIdx(i + 1, j, k)] != CellType::Solid;
+          float sy0 =
+              (float)celltype[getCellIdx(i, j - 1, k)] != CellType::Solid;
+          float sy1 =
+              (float)celltype[getCellIdx(i, j + 1, k)] != CellType::Solid;
+          float sz0 =
+              (float)celltype[getCellIdx(i, j, k - 1)] != CellType::Solid;
+          float sz1 =
+              (float)celltype[getCellIdx(i, j, k + 1)] != CellType::Solid;
           float s_sum = sx0 + sx1 + sy0 + sy1 + sz0 + sz1;
 
           if (s_sum == 0.0f) continue;
 
           float div = divergence[getCellIdx(i, j, k)];
 
-          // Accumulate neighbor cells pressures.
+          // Neighbor cells' pressures.
           float p_sum = 0.0f;
           p_sum += p[getCellIdx(i - 1, j, k)];
           p_sum += p[getCellIdx(i + 1, j, k)];
@@ -533,8 +553,8 @@ void FluidSystem::transferFromCUDA() {
 void FluidSystem::integrateParticlesCUDA() {
   void* args[2] = {&cu_pos, &cu_vel};
 
-  cuCheck(cuLaunchKernel(m_Func[FUNC_INTEGRATE], numBlocks, 1, 1, numThreads, 1, 1,
-                         0, NULL, args, NULL),
+  cuCheck(cuLaunchKernel(m_Func[FUNC_INTEGRATE], numBlocks, 1, 1, numThreads, 1,
+                         1, 0, NULL, args, NULL),
           "IntegrateParticlesCUDA", "cuLaunch", "FUNC_INTEGRATE", mbDebug);
 }
 
@@ -572,23 +592,19 @@ void FluidSystem::transferToGridCUDA(VolumeGVDB &gvdb) {
   gvdb.ClearChannel(CHAN_VELOCITY);
 
   component = Component::X;
-  cuCheck(
-      cuLaunchKernel(m_Func[FUNC_TRANSFER_TO_GRID], numSCell, 1, 1,
-                     subcell, subcell, subcell, 0, NULL, args, NULL),
-      "transferToGridCUDA", "cuLaunch", "FUNC_TRANSFER_TO_GRID", mbDebug);
+  cuCheck(cuLaunchKernel(m_Func[FUNC_TRANSFER_TO_GRID], numSCell, 1, 1, subcell,
+                         subcell, subcell, 0, NULL, args, NULL),
+          "transferToGridCUDA", "cuLaunch", "FUNC_TRANSFER_TO_GRID", mbDebug);
 
   component = Component::Y;
-  cuCheck(
-      cuLaunchKernel(m_Func[FUNC_TRANSFER_TO_GRID], numSCell, 1, 1,
-                     subcell, subcell, subcell, 0, NULL, args, NULL),
-      "transferToGridCUDA", "cuLaunch", "FUNC_TRANSFER_TO_GRID", mbDebug);
+  cuCheck(cuLaunchKernel(m_Func[FUNC_TRANSFER_TO_GRID], numSCell, 1, 1, subcell,
+                         subcell, subcell, 0, NULL, args, NULL),
+          "transferToGridCUDA", "cuLaunch", "FUNC_TRANSFER_TO_GRID", mbDebug);
 
   component = Component::Z;
-  cuCheck(
-      cuLaunchKernel(m_Func[FUNC_TRANSFER_TO_GRID], numSCell, 1, 1,
-                     subcell, subcell, subcell, 0, NULL, args, NULL),
-      "transferToGridCUDA", "cuLaunch", "FUNC_TRANSFER_TO_GRID", mbDebug);
-  gvdb.UpdateApron(CHAN_VELOCITY);
+  cuCheck(cuLaunchKernel(m_Func[FUNC_TRANSFER_TO_GRID], numSCell, 1, 1, subcell,
+                         subcell, subcell, 0, NULL, args, NULL),
+          "transferToGridCUDA", "cuLaunch", "FUNC_TRANSFER_TO_GRID", mbDebug);
 }
 
 void FluidSystem::transferFromGridCUDA(VolumeGVDB &gvdb) {
@@ -612,20 +628,118 @@ void FluidSystem::transferFromGridCUDA(VolumeGVDB &gvdb) {
                     &gvdb.getAux(AUX_PNTVEL).gpu};
 
   component = Component::X;
-  cuCheck(
-      cuLaunchKernel(m_Func[FUNC_TRANSFER_FROM_GRID], numSCell, 1, 1,
-                     subcell, subcell, subcell, 0, NULL, args, NULL),
-      "transferFromGridCUDA", "cuLaunch", "FUNC_TRANSFER_FROM_GRID", mbDebug);
+  cuCheck(cuLaunchKernel(m_Func[FUNC_TRANSFER_FROM_GRID], numSCell, 1, 1,
+                         subcell, subcell, subcell, 0, NULL, args, NULL),
+          "transferFromGridCUDA", "cuLaunch", "FUNC_TRANSFER_FROM_GRID",
+          mbDebug);
 
   component = Component::Y;
-  cuCheck(
-      cuLaunchKernel(m_Func[FUNC_TRANSFER_FROM_GRID], numSCell, 1, 1,
-                     subcell, subcell, subcell, 0, NULL, args, NULL),
-      "transferFromGridCUDA", "cuLaunch", "FUNC_TRANSFER_FROM_GRID", mbDebug);
+  cuCheck(cuLaunchKernel(m_Func[FUNC_TRANSFER_FROM_GRID], numSCell, 1, 1,
+                         subcell, subcell, subcell, 0, NULL, args, NULL),
+          "transferFromGridCUDA", "cuLaunch", "FUNC_TRANSFER_FROM_GRID",
+          mbDebug);
 
   component = Component::Z;
-  cuCheck(
-      cuLaunchKernel(m_Func[FUNC_TRANSFER_FROM_GRID], numSCell, 1, 1,
-                     subcell, subcell, subcell, 0, NULL, args, NULL),
-      "transferFromGridCUDA", "cuLaunch", "FUNC_TRANSFER_FROM_GRID", mbDebug);
+  cuCheck(cuLaunchKernel(m_Func[FUNC_TRANSFER_FROM_GRID], numSCell, 1, 1,
+                         subcell, subcell, subcell, 0, NULL, args, NULL),
+          "transferFromGridCUDA", "cuLaunch", "FUNC_TRANSFER_FROM_GRID",
+          mbDebug);
+}
+
+void FluidSystem::updateCellsCUDA(VolumeGVDB &gvdb) {
+  gvdb.ClearChannel(CHAN_CELL_TYPE);
+
+  int num_brick = static_cast<int>(gvdb.mPool->getPoolUsedCnt(0, 0));
+  if (num_brick == 0) return;
+
+  CUdeviceptr cuVDBInfo = gvdb.getCUVDBInfo();
+  int numSCell = static_cast<int>(pow(gvdb.getRes(0) / subcell, 3)) * num_brick;
+
+  void *argsGravity[4] = {&cuVDBInfo, &numSCell,
+                         &gvdb.getAux(AUX_SUBCELL_NID).gpu,
+                         &gvdb.getAux(AUX_SUBCELL_POS).gpu};
+
+  cuCheck(cuLaunchKernel(m_Func[FUNC_APPLY_GRAVITY], numSCell, 1, 1, subcell,
+                         subcell, subcell, 0, NULL, argsGravity, NULL),
+          "updateCellsCUDA", "cuLaunch", "FUNC_APPLY_GRAVITY", mbDebug);
+
+  gvdb.UpdateApron(CHAN_VELOCITY);
+
+  void *argsMark[7] = {&cuVDBInfo,
+                    &numSCell,
+                    &gvdb.getAux(AUX_SUBCELL_NID).gpu,
+                    &gvdb.getAux(AUX_SUBCELL_CNT).gpu,
+                    &gvdb.getAux(AUX_SUBCELL_PREFIXSUM).gpu,
+                    &gvdb.getAux(AUX_SUBCELL_POS).gpu,
+                    &gvdb.getAux(AUX_SUBCELL_PNT_POS).gpu};
+
+  cuCheck(cuLaunchKernel(m_Func[FUNC_MARK_CELLS], numSCell, 1, 1, subcell,
+                         subcell, subcell, 0, NULL, argsMark, NULL),
+          "updateCellsCUDA", "cuLaunch", "FUNC_MARK_CELLS", mbDebug);
+
+  gvdb.UpdateApron(CHAN_CELL_TYPE);
+}
+
+void FluidSystem::computeDivergenceCUDA(VolumeGVDB &gvdb) {
+  gvdb.ClearChannel(CHAN_DIVERGENCE);
+
+  int num_brick = static_cast<int>(gvdb.mPool->getPoolUsedCnt(0, 0));
+  if (num_brick == 0) return;
+
+  CUdeviceptr cuVDBInfo = gvdb.getCUVDBInfo();
+  int numSCell = static_cast<int>(pow(gvdb.getRes(0) / subcell, 3)) * num_brick;
+
+  void *args[4] = {&cuVDBInfo, &numSCell,
+                         &gvdb.getAux(AUX_SUBCELL_NID).gpu,
+                         &gvdb.getAux(AUX_SUBCELL_POS).gpu};
+
+  cuCheck(cuLaunchKernel(m_Func[FUNC_COMPUTE_DIVERGENCE], numSCell, 1, 1,
+                         subcell, subcell, subcell, 0, NULL, args, NULL),
+          "computeDivergenceCUDA", "cuLaunch", "FUNC_COMPUTE_DIVERGENCE",
+          mbDebug);
+}
+
+void FluidSystem::solveJacobiCUDA(VolumeGVDB &gvdb) {
+  int num_brick = static_cast<int>(gvdb.mPool->getPoolUsedCnt(0, 0));
+  if (num_brick == 0) return;
+
+  CUdeviceptr cuVDBInfo = gvdb.getCUVDBInfo();
+  int numSCell = static_cast<int>(pow(gvdb.getRes(0) / subcell, 3)) * num_brick;
+
+  int p_chan = CHAN_PRESSURE;
+  int p_tmp_chan = CHAN_PRESSURE_TMP;
+  void *args[6] = {&cuVDBInfo, &numSCell, &p_chan, &p_tmp_chan,
+                         &gvdb.getAux(AUX_SUBCELL_NID).gpu,
+                         &gvdb.getAux(AUX_SUBCELL_POS).gpu};
+
+  for (int i = 0; i < solveIters; i++) {
+    cuCheck(cuLaunchKernel(m_Func[FUNC_SOLVE_JACOBI], numSCell, 1, 1, subcell,
+                           subcell, subcell, 0, NULL, args, NULL),
+            "solveJacobiCUDA", "cuLaunch", "FUNC_SOLVE_JACOBI", mbDebug);
+
+    // Swap pressure buffers.
+    p_chan = (p_chan == CHAN_PRESSURE) ? CHAN_PRESSURE_TMP : CHAN_PRESSURE;
+    p_tmp_chan = (p_chan == CHAN_PRESSURE) ? CHAN_PRESSURE_TMP : CHAN_PRESSURE;
+
+    gvdb.UpdateApron(p_chan);
+  }
+}
+
+void FluidSystem::applyPressureCUDA(VolumeGVDB &gvdb) {
+  int num_brick = static_cast<int>(gvdb.mPool->getPoolUsedCnt(0, 0));
+  if (num_brick == 0) return;
+
+  CUdeviceptr cuVDBInfo = gvdb.getCUVDBInfo();
+  int numSCell = static_cast<int>(pow(gvdb.getRes(0) / subcell, 3)) * num_brick;
+
+  void *args[4] = {&cuVDBInfo, &numSCell,
+                         &gvdb.getAux(AUX_SUBCELL_NID).gpu,
+                         &gvdb.getAux(AUX_SUBCELL_POS).gpu};
+
+  cuCheck(cuLaunchKernel(m_Func[FUNC_APPLY_PRESSURE], numSCell, 1, 1,
+                         subcell, subcell, subcell, 0, NULL, args, NULL),
+          "applyPressureCUDA", "cuLaunch", "FUNC_APPLY_PRESSURE",
+          mbDebug);
+
+  gvdb.UpdateApron(CHAN_VELOCITY);
 }

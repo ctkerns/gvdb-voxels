@@ -22,4 +22,14 @@ extern "C" {
                                    int *sc_cnt, int *sc_off, int3 *sc_pos,
                                    float3 *sc_pnt_pos, uint *sc_pnt_clr,
                                    float3 *vel);
-  }
+  __global__ void applyGravity(VDBInfo *gvdb, int num_sc, int *sc_nid,
+                               int3 *sc_pos);
+  __global__ void markCells(VDBInfo *gvdb, int num_sc, int *sc_nid, int *sc_cnt,
+                            int *sc_off, int3 *sc_pos, float3 *sc_pnt_pos);
+  __global__ void computeDivergence(VDBInfo *gvdb, int num_sc, int *sc_nid,
+                               int3 *sc_pos);
+  __global__ void solveJacobi(VDBInfo *gvdb, int num_sc, int p_chan,
+                              int p_tmp_chan, int *sc_nid, int3 *sc_pos);
+  __global__ void applyPressure(VDBInfo *gvdb, int num_sc, int *sc_nid,
+                                int3 *sc_pos);
+}

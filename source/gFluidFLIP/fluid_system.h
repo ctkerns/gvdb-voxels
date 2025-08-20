@@ -16,14 +16,19 @@ using namespace nvdb;
 #define FUNC_HANDLE_COLLISION 1
 #define FUNC_TRANSFER_FROM_GRID 2
 #define FUNC_TRANSFER_TO_GRID 3
-#define FUNC_MAX 4
+#define FUNC_MARK_CELLS 4
+#define FUNC_APPLY_GRAVITY 5
+#define FUNC_COMPUTE_DIVERGENCE 6
+#define FUNC_SOLVE_JACOBI 7
+#define FUNC_APPLY_PRESSURE 8
+#define FUNC_MAX 9
 
-#define CPU_SIM
+// #define CPU_SIM
 // #define COMPENSATE_DRIFT
 
-#define CELLS_X 30
-#define CELLS_Y 30
-#define CELLS_Z 30 
+#define CELLS_X 50
+#define CELLS_Y 50
+#define CELLS_Z 50 
 
 class FluidSystem {
 private:
@@ -94,6 +99,10 @@ public:
   void handleParticleCollisionCUDA();
   void transferToGridCUDA(VolumeGVDB &gvdb);
   void transferFromGridCUDA(VolumeGVDB &gvdb);
+  void updateCellsCUDA(VolumeGVDB &gvdb);
+  void computeDivergenceCUDA(VolumeGVDB &gvdb);
+  void solveJacobiCUDA(VolumeGVDB &gvdb);
+  void applyPressureCUDA(VolumeGVDB &gvdb);
 
   // Simulation parameters.
   const Vector3DI gridres = Vector3DI(CELLS_X, CELLS_Y, CELLS_Z);

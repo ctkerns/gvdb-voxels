@@ -9,6 +9,9 @@
 #define CHAN_LEVEL_SET 0
 #define CHAN_VELOCITY 1
 #define CHAN_CELL_TYPE 2
+#define CHAN_DIVERGENCE 3
+#define CHAN_PRESSURE 4
+#define CHAN_PRESSURE_TMP 5
 
 typedef struct FluidParams {
   int3 gridres;

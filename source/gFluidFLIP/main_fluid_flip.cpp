@@ -1,6 +1,7 @@
 // Christopher Kerns 2025
 
 // GVDB library
+// #include "fluid_params.h"
 #include "gvdb.h"
 #include <cuda.h>
 using namespace nvdb;
@@ -193,7 +194,6 @@ void Sample::on_arg(std::string arg, std::string val) {
   }
 }
 
-__attribute__((no_sanitize_address))
 bool Sample::init() {
   m_w = getWidth(); // window width & height
   m_h = getHeight();
@@ -254,8 +254,11 @@ bool Sample::init() {
   // Configure
   gvdb.Configure(3, 3, 3, 3, 3);
   gvdb.AddChannel(CHAN_LEVEL_SET, T_FLOAT, 1, F_LINEAR);
-  gvdb.AddChannel(CHAN_VELOCITY, T_FLOAT3, 1); // velocity
-  gvdb.AddChannel(CHAN_CELL_TYPE, T_UCHAR, 1); // cell type
+  gvdb.AddChannel(CHAN_VELOCITY, T_FLOAT3, 1);
+  gvdb.AddChannel(CHAN_CELL_TYPE, T_UCHAR, 1);
+  gvdb.AddChannel(CHAN_DIVERGENCE, T_FLOAT, 1);
+  gvdb.AddChannel(CHAN_PRESSURE, T_FLOAT, 1);
+  gvdb.AddChannel(CHAN_PRESSURE_TMP, T_FLOAT, 1);
 
   // Initialize GUIs
   start_guis(m_w, m_h);
@@ -321,11 +324,11 @@ void Sample::simulate() {
 
   // Test Reading back data.
   // DataPtr readback;
-  // gvdb.AllocData(readback, gvdb.getVoxCnt(0), sizeof(Vector3DF), true);
-  // gvdb.AtlasRetrieveBrickXYZ(1, Vector3DI(1, 1, 1), readback);
+  // gvdb.AllocData(readback, gvdb.getVoxCnt(0), sizeof(float4), true);
+  // gvdb.AtlasRetrieveBrickXYZ(CHAN_VELOCITY, Vector3DI(0, 0, 0), readback);
   // assert(readback.cpu != nullptr);
-  // Vector3DF *reads = reinterpret_cast<Vector3DF*>(readback.cpu);
-  // nvprintf("\n%f, %f, %f\n", reads[256].x, reads[256].y, reads[256].z);
+  // float *reads = reinterpret_cast<float*>(readback.cpu);
+  // nvprintf("%f\n", reads[511]);
   // gvdb.FreeData(readback);
 
   // Gather points to level set
@@ -342,8 +345,6 @@ void Sample::simulate() {
                            CHAN_LEVEL_SET, 0);
   gvdb.UpdateApron(CHAN_LEVEL_SET, 3.0f);
   PERF_POP();
-  gvdb.UpdateApron(CHAN_VELOCITY);
-  gvdb.UpdateApron(CHAN_LEVEL_SET);
 
   if (m_render_optix) {
     PERF_PUSH("Update OptiX");
