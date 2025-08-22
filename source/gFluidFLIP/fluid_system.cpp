@@ -55,7 +55,7 @@ FluidSystem::FluidSystem() {
   fp.gravity *= 30.0f; // Unit scale.
   fp.numpnts = (fp.gridres.x) * (fp.gridres.y) * (fp.gridres.z);
   fp.density = 1000.0f;
-  fp.radius = 0.01f;
+  fp.radius = 0.5f;
 
   numThreads = (fp.numpnts < threadsPerBlock) ? fp.numpnts : threadsPerBlock;
   numBlocks = (fp.numpnts % numThreads != 0) ? (fp.numpnts / numThreads + 1)
@@ -305,9 +305,9 @@ void FluidSystem::transferFromGrid() {
 
 void FluidSystem::updateCells() {
   // Apply gravity and boundary conditions.
-  for (int i = 1; i < fp.gridres.x - 1; i++) {
-    for (int j = 1; j < fp.gridres.y - 1; j++) {
-      for (int k = 1; k < fp.gridres.z - 1; k++) {
+  for (int i = 1; i < fp.gridres.x; i++) {
+    for (int j = 1; j < fp.gridres.y; j++) {
+      for (int k = 1; k < fp.gridres.z; k++) {
         if (celltype[getCellIdx(i - 1, j, k)] == CellType::Solid ||
             celltype[getCellIdx(i, j, k)] == CellType::Solid) {
           cellvel[getCellIdx(i, j, k)].x = 0.0f;
@@ -517,23 +517,32 @@ void FluidSystem::solveJacobi() {
 void FluidSystem::applyPressure() {
   float dt_div_rho_0_h = fp.dt / (fp.density * fp.h);
 
-  for (int i = 1; i < fp.gridres.x - 1; i++) {
-    for (int j = 1; j < fp.gridres.y - 1; j++) {
-      for (int k = 1; k < fp.gridres.z - 1; k++) {
-        if (celltype[getCellIdx(i - 1, j, k)] == CellType::Solid || celltype[getCellIdx(i, j, k)] == CellType::Solid) {
+  for (int i = 1; i < fp.gridres.x; i++) {
+    for (int j = 1; j < fp.gridres.y; j++) {
+      for (int k = 1; k < fp.gridres.z; k++) {
+        if (celltype[getCellIdx(i - 1, j, k)] == CellType::Solid ||
+            celltype[getCellIdx(i, j, k)] == CellType::Solid) {
           cellvel[getCellIdx(i, j, k)].x = 0.0f;
         } else {
-          cellvel[getCellIdx(i, j, k)].x -= dt_div_rho_0_h * (p[getCellIdx(i, j, k)] - p[getCellIdx(i - 1, j, k)]);
+          cellvel[getCellIdx(i, j, k)].x -=
+              dt_div_rho_0_h *
+              (p[getCellIdx(i, j, k)] - p[getCellIdx(i - 1, j, k)]);
         }
-        if (celltype[getCellIdx(i, j - 1, k)] == CellType::Solid || celltype[getCellIdx(i, j, k)] == CellType::Solid) {
+        if (celltype[getCellIdx(i, j - 1, k)] == CellType::Solid ||
+            celltype[getCellIdx(i, j, k)] == CellType::Solid) {
           cellvel[getCellIdx(i, j, k)].y = 0.0f;
         } else {
-          cellvel[getCellIdx(i, j, k)].y -= dt_div_rho_0_h * (p[getCellIdx(i, j, k)] - p[getCellIdx(i, j - 1, k)]);
+          cellvel[getCellIdx(i, j, k)].y -=
+              dt_div_rho_0_h *
+              (p[getCellIdx(i, j, k)] - p[getCellIdx(i, j - 1, k)]);
         }
-        if (celltype[getCellIdx(i, j, k - 1)] == CellType::Solid || celltype[getCellIdx(i, j, k)] == CellType::Solid) {
+        if (celltype[getCellIdx(i, j, k - 1)] == CellType::Solid ||
+            celltype[getCellIdx(i, j, k)] == CellType::Solid) {
           cellvel[getCellIdx(i, j, k)].z = 0.0f;
         } else {
-          cellvel[getCellIdx(i, j, k)].z -= dt_div_rho_0_h * (p[getCellIdx(i, j, k)] - p[getCellIdx(i, j, k - 1)]);
+          cellvel[getCellIdx(i, j, k)].z -=
+              dt_div_rho_0_h *
+              (p[getCellIdx(i, j, k)] - p[getCellIdx(i, j, k - 1)]);
         }
       }
     }

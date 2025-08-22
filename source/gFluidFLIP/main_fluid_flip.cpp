@@ -1,7 +1,6 @@
 // Christopher Kerns 2025
 
 // GVDB library
-// #include "fluid_params.h"
 #include "gvdb.h"
 #include <cuda.h>
 using namespace nvdb;

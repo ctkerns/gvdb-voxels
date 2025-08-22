@@ -47,9 +47,6 @@ __global__ void handleParticleCollision(float3 *pos, float3 *vel) {
   }
 }
 
-// TODO: Optimization: We are dispatching kernels over all the same subcells,
-// so why not cache the GVDB nodes for reuse?
-
 __global__ void transferToGrid(VDBInfo *gvdb, int num_sc, Component component,
                                int *sc_nid, int *sc_cnt, int *sc_off,
                                int3 *sc_pos, float3 *sc_pnt_pos,
@@ -178,12 +175,12 @@ __global__ void applyGravity(VDBInfo *gvdb, int num_sc, int *sc_nid,
 
   float3 val = fxyz(surf3Dread<float4>(gvdb->volOut[CHAN_VELOCITY],
                                        vox.x * sizeof(float4), vox.y, vox.z));
-
-  if (wpos.x < 1 || wpos.x >= fp.gridres.x - 1) val.x = 0.0f;
-  if (wpos.y < 1 || wpos.y >= fp.gridres.y - 1) val.y = 0.0f;
-  if (wpos.z < 1 || wpos.z >= fp.gridres.z - 1) val.z = 0.0f;
-
   val += fp.gravity * fp.dt;
+
+  if (wpos.x == 1 || wpos.x == fp.gridres.x - 1) val.x = 0.0f;
+  if (wpos.y == 1 || wpos.y == fp.gridres.y - 1) val.y = 0.0f;
+  if (wpos.z == 1 || wpos.z == fp.gridres.z - 1) val.z = 0.0f;
+
   surf3Dwrite(make_float4(val), gvdb->volOut[CHAN_VELOCITY],
               vox.x * sizeof(float4), vox.y, vox.z);
 }
@@ -244,15 +241,23 @@ __global__ void solveJacobi(VDBInfo *gvdb, int num_sc, int p_chan,
 
   // Air cells have zero pressure.
   if (surf3Dread<uchar>(gvdb->volOut[CHAN_CELL_TYPE], vox.x * sizeof(uchar),
-                        vox.y, vox.z) != CellType::Fluid) {
+                        vox.y, vox.z) == CellType::Air) {
+    surf3Dwrite(0.0f, gvdb->volOut[p_tmp_chan], vox.x * sizeof(float), vox.y,
+                vox.z);
+    return;
+  }
+  
+  // Boundary cells have zero pressure.
+  if (wpos.x == 0 || wpos.x == fp.gridres.x - 1 || wpos.y == 0 ||
+      wpos.y == fp.gridres.y - 1 || wpos.z == 0 || wpos.z == fp.gridres.z - 1) {
     surf3Dwrite(0.0f, gvdb->volOut[p_tmp_chan], vox.x * sizeof(float), vox.y,
                 vox.z);
     return;
   }
 
-  float s_sum = float(wpos.x > 1) + float(wpos.x < fp.gridres.x - 2) +
-                float(wpos.y > 1) + float(wpos.y < fp.gridres.y - 2) +
-                float(wpos.z > 1) + float(wpos.z < fp.gridres.z - 2);
+  float s_sum = float(wpos.x != 1) + float(wpos.x != fp.gridres.x - 2) +
+                float(wpos.y != 1) + float(wpos.y != fp.gridres.y - 2) +
+                float(wpos.z != 1) + float(wpos.z != fp.gridres.z - 2);
 
   if (s_sum == 0.0f) return;
 
@@ -292,22 +297,21 @@ __global__ void applyPressure(VDBInfo *gvdb, int num_sc, int *sc_nid, int3 *sc_p
   float3 vel = fxyz(surf3Dread<float4>(gvdb->volOut[CHAN_VELOCITY],
                                       vox.x * sizeof(float4), vox.y, vox.z));
 
-  float p  = surf3Dread<float>(gvdb->volOut[CHAN_PRESSURE],
+  float p = surf3Dread<float>(gvdb->volOut[CHAN_PRESSURE],
                               vox.x * sizeof(float), vox.y, vox.z);
 
-  // TODO: Why > gridres instead of >= gridres?
-  if (wpos.x <= 1 || wpos.x > fp.gridres.x - 1) vel.x = 0.0f;
+  if (wpos.x == 1 || wpos.x == fp.gridres.x - 1) vel.x = 0.0f;
   else
     vel.x -=
         (p - surf3Dread<float>(gvdb->volOut[CHAN_PRESSURE],
                                (vox.x - 1) * sizeof(float), vox.y, vox.z)) *
         dt_div_rho_0_h;
-  if (wpos.y <= 1 || wpos.y > fp.gridres.y - 1) vel.y = 0.0f;
+  if (wpos.y == 1 || wpos.y == fp.gridres.y - 1) vel.y = 0.0f;
   else
     vel.y -= (p - surf3Dread<float>(gvdb->volOut[CHAN_PRESSURE],
                                     vox.x * sizeof(float), vox.y - 1, vox.z)) *
              dt_div_rho_0_h;
-  if (wpos.z <= 1 || wpos.z > fp.gridres.z - 1) vel.z = 0.0f;
+  if (wpos.z == 1 || wpos.z == fp.gridres.z - 1) vel.z = 0.0f;
   else
     vel.z -= (p - surf3Dread<float>(gvdb->volOut[CHAN_PRESSURE],
                                     vox.x * sizeof(float), vox.y, vox.z - 1)) *
