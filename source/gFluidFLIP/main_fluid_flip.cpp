@@ -47,7 +47,7 @@ public:
   void RebuildOptixGraph(int shading);
   void ReportMemory();
 
-  int m_radius;
+  float m_radius;
   Vector3DF m_origin;
   float m_renderscale;
 
@@ -199,7 +199,7 @@ bool Sample::init() {
   mouse_down = -1;
   gl_screen_tex = -1;
   m_show_topo = false;
-  m_radius = 1;
+  m_radius = 1.0f;
   m_origin = Vector3DF(0, 0, 0);
   m_shade_style = 5;
 
@@ -336,12 +336,10 @@ void Sample::simulate() {
 
   int scPntLen = 0;
   int subcell_size = 4;
-  gvdb.InsertPointsSubcell_FP16(subcell_size, m_numpnts,
-                                static_cast<float>(m_radius), m_origin,
+  gvdb.InsertPointsSubcell_FP16(subcell_size, m_numpnts, m_radius, m_origin,
                                 scPntLen);
-  gvdb.GatherLevelSet_FP16(subcell_size, m_numpnts,
-                           static_cast<float>(m_radius), m_origin, scPntLen,
-                           CHAN_LEVEL_SET, 0);
+  gvdb.GatherLevelSet_FP16(subcell_size, m_numpnts, m_radius, m_origin,
+                           scPntLen, CHAN_LEVEL_SET, 0);
   gvdb.UpdateApron(CHAN_LEVEL_SET, 3.0f);
   PERF_POP();
 

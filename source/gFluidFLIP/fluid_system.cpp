@@ -45,21 +45,21 @@ Vector3DF lerp3(Vector3DF v1, Vector3DF v2, Vector3DF t) {
 }
 
 FluidSystem::FluidSystem() {
-	for (int n=0; n < FUNC_MAX; n++ ) m_Func[n] = (CUfunction) -1;
+  for (int n=0; n < FUNC_MAX; n++ ) m_Func[n] = (CUfunction) -1;
 
   fp.gridres = make_int3(CELLS_X, CELLS_Y, CELLS_Z); // TODO: Why do we have to
                                                      // define here again?
   fp.h = 1.0;
   fp.dt = 1.0f / (12.0f * 30.0f);
   fp.gravity = make_float3(0.0f, -9.8f, 0.0f);
-  fp.gravity *= 30.0f; // Unit scale.
+  fp.gravity *= 30.0f; // Unit scale. TODO: Remove this.
   fp.numpnts = (fp.gridres.x) * (fp.gridres.y) * (fp.gridres.z);
   fp.density = 1000.0f;
-  fp.radius = 0.5f;
+  fp.radius = 0.5f * fp.h;
 
   numThreads = (fp.numpnts < threadsPerBlock) ? fp.numpnts : threadsPerBlock;
   numBlocks = (fp.numpnts % numThreads != 0) ? (fp.numpnts / numThreads + 1)
-                                          : (fp.numpnts / numThreads);
+                                             : (fp.numpnts / numThreads);
 }
 
 FluidSystem::~FluidSystem() {}
@@ -145,6 +145,7 @@ void FluidSystem::run(VolumeGVDB &gvdb) {
   transferToCUDA();
 
 #ifdef CPU_SIM
+  gvdb.ScalePntPos(fp.numpnts, 1.0f / fp.h);
   integrateParticles();
   handleParticleCollision();
   transferToGrid();
@@ -173,7 +174,7 @@ void FluidSystem::run(VolumeGVDB &gvdb) {
 
 // Apply gravity and velocity.
 void FluidSystem::integrateParticles() {
-  for (int i = 0; i < pos.size(); i++) {
+  for (int i = 0; i < fp.numpnts; i++) {
     pos[i] += vel[i] * fp.dt;
   }
 }
@@ -185,25 +186,25 @@ void FluidSystem::handleParticleCollision() {
   float maxY = (fp.gridres.y - 1) * fp.h - fp.radius;
   float maxZ = (fp.gridres.z - 1) * fp.h - fp.radius;
 
-  for (int i = 0; i < pos.size(); i++) {
+  for (int i = 0; i < fp.numpnts; i++) {
     if (pos[i].x < min) {
       pos[i].x = min;
       vel[i].x = 0.0f;
-    } else if (pos[i].x >= maxX) {
+    } else if (pos[i].x > maxX) {
       pos[i].x = maxX;
       vel[i].x = 0.0f;
     }
     if (pos[i].y < min) {
       pos[i].y = min;
       vel[i].y = 0.0f;
-    } else if (pos[i].y >= maxY) {
+    } else if (pos[i].y > maxY) {
       pos[i].y = maxY;
       vel[i].y = 0.0f;
     }
     if (pos[i].z < min) {
       pos[i].z = min;
       vel[i].z = 0.0f;
-    } else if (pos[i].z >= maxZ) {
+    } else if (pos[i].z > maxZ) {
       pos[i].z = maxZ;
       vel[i].z = 0.0f;
     }
@@ -235,8 +236,8 @@ Vector3DF FluidSystem::getVelocityFromGrid(Vector3DF pos, Component component) {
     valid[i] = !(c1 == CellType::Air && c2 == CellType::Air);
   }
 
-  float3 rvel = getVelocityFromGridCell(ppos - make_float3(cellidx), vel, valid,
-                                        component);
+  float3 rvel = getVelocityFromGridCell(ppos / fp.h - make_float3(cellidx), vel,
+                                        valid, component);
   return Vector3DF(rvel.x, rvel.y, rvel.z);
 }
 
@@ -248,7 +249,8 @@ float FluidSystem::addVelocityFromParticle(Vector3DF pos, Vector3DF vel,
   // Weights for each corner.
   float w[8];
   float3 pposc =
-      make_float3(ppos.x - cellidx.x, ppos.y - cellidx.y, ppos.z - cellidx.z);
+      make_float3(ppos.x / fp.h - cellidx.x, ppos.y / fp.h - cellidx.y,
+                  ppos.z / fp.h - cellidx.z);
   getCellWeights(pposc, w);
 
   Vector3DF mask =
@@ -278,7 +280,7 @@ void FluidSystem::transferToGrid() {
     }
   }
 
-  for (int i = 0; i < pos.size(); i++) {
+  for (int i = 0; i < fp.numpnts; i++) {
     addVelocityFromParticle(pos[i], vel[i], Component::X);
     addVelocityFromParticle(pos[i], vel[i], Component::Y);
     addVelocityFromParticle(pos[i], vel[i], Component::Z);
@@ -296,7 +298,7 @@ void FluidSystem::transferToGrid() {
   
 // Transfer velocities from grid to particle.
 void FluidSystem::transferFromGrid() {
-  for (int i = 0; i < pos.size(); i++) {
+  for (int i = 0; i < fp.numpnts; i++) {
     vel[i] = getVelocityFromGrid(pos[i], Component::X) +
              getVelocityFromGrid(pos[i], Component::Y) +
              getVelocityFromGrid(pos[i], Component::Z);
@@ -331,7 +333,7 @@ void FluidSystem::updateCells() {
   }
 
   // Mark cells with particles as fluid cells.
-  for (int i = 0; i < pos.size(); i++) {
+  for (int i = 0; i < fp.numpnts; i++) {
     Vector3DI cellidx = pos[i] / fp.h;
 
     if (celltype[getCellIdx(cellidx)] == CellType::Air) {
@@ -346,7 +348,7 @@ void FluidSystem::updateParticleDensity() {
   }
 
   // Add density to each cell from every particle.
-  for (int i = 0; i < pos.size(); i++) {
+  for (int i = 0; i < fp.numpnts; i++) {
     Vector3DF offsetpos = pos[i] - Vector3DF(fp.h/2.0f, fp.h/2.0f, fp.h/2.0f);
     Vector3DI cellidx = offsetpos / fp.h;
     float3 pposc = make_float3(offsetpos.x - cellidx.x, offsetpos.y - cellidx.y,
@@ -550,13 +552,17 @@ void FluidSystem::applyPressure() {
 }
 
 void FluidSystem::transferToCUDA() {
-  cuCheck(cuMemcpyHtoD(cu_pos, pos.data(), fp.numpnts*sizeof(Vector3DF)), "transferToCUDA", "cuMemcpyHtoD", "cu_pos", mbDebug);
-  cuCheck(cuMemcpyHtoD(cu_vel, vel.data(), fp.numpnts*sizeof(Vector3DF)), "transferToCUDA", "cuMemcpyHtoD", "cu_vel", mbDebug);
+  cuCheck(cuMemcpyHtoD(cu_pos, pos.data(), fp.numpnts * sizeof(Vector3DF)),
+          "transferToCUDA", "cuMemcpyHtoD", "cu_pos", mbDebug);
+  cuCheck(cuMemcpyHtoD(cu_vel, vel.data(), fp.numpnts * sizeof(Vector3DF)),
+          "transferToCUDA", "cuMemcpyHtoD", "cu_vel", mbDebug);
 }
 
 void FluidSystem::transferFromCUDA() {
-  cuCheck(cuMemcpyDtoH(pos.data(), cu_pos, fp.numpnts*sizeof(Vector3DF)), "transferFromCUDA", "cuMemcpyDtoH", "cu_pos", mbDebug);
-  cuCheck(cuMemcpyDtoH(vel.data(), cu_vel, fp.numpnts*sizeof(Vector3DF)), "transferFromCUDA", "cuMemcpyDtoH", "cu_vel", mbDebug);
+  cuCheck(cuMemcpyDtoH(pos.data(), cu_pos, fp.numpnts * sizeof(Vector3DF)),
+          "transferFromCUDA", "cuMemcpyDtoH", "cu_pos", mbDebug);
+  cuCheck(cuMemcpyDtoH(vel.data(), cu_vel, fp.numpnts * sizeof(Vector3DF)),
+          "transferFromCUDA", "cuMemcpyDtoH", "cu_vel", mbDebug);
 }
 
 void FluidSystem::integrateParticlesCUDA() {
