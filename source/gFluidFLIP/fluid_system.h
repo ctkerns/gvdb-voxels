@@ -65,6 +65,7 @@ private:
   CUfunction m_Func[FUNC_MAX];
 
   bool mbDebug = true;
+  bool firstRun = true;
 
 public:
   FluidSystem();

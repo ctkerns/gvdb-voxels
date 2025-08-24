@@ -27,21 +27,21 @@ __global__ void handleParticleCollision(float3 *pos, float3 *vel) {
   if (pos[i].x < min) {
     pos[i].x = min;
     vel[i].x = 0.0f;
-  } else if (pos[i].x >= maxX) {
+  } else if (pos[i].x > maxX) {
     pos[i].x = maxX;
     vel[i].x = 0.0f;
   }
   if (pos[i].y < min) {
     pos[i].y = min;
     vel[i].y = 0.0f;
-  } else if (pos[i].y >= maxY) {
+  } else if (pos[i].y > maxY) {
     pos[i].y = maxY;
     vel[i].y = 0.0f;
   }
   if (pos[i].z < min) {
     pos[i].z = min;
     vel[i].z = 0.0f;
-  } else if (pos[i].z >= maxZ) {
+  } else if (pos[i].z > maxZ) {
     pos[i].z = maxZ;
     vel[i].z = 0.0f;
   }
@@ -63,7 +63,7 @@ __global__ void transferToGrid(VDBInfo *gvdb, int num_sc, Component component,
 
   for (int j = 0; j < sc_cnt[sc_id]; j++) {
     float3 ppos = sc_pnt_pos[sc_off[sc_id] + j];
-    ppos = offsetGrid(fp, ppos, component);
+    ppos -= offsetGrid(component);
 
     // TODO this could be done easier.
     // Only take into account particles within 2x2x2 grid.
@@ -139,15 +139,15 @@ __global__ void transferFromGrid(VDBInfo *gvdb, int num_sc, Component component,
 
   for (int j = 0; j < sc_cnt[sc_id]; j++) {
     float3 ppos = sc_pnt_pos[sc_off[sc_id] + j];
-    ppos = offsetGrid(fp, ppos, component);
+    ppos -= offsetGrid(component);
 
     // TODO: This could be done way easier.
     // Only take into account particles within this cell.
     if (ppos.x >= wpos.x && ppos.x < wpos.x + 1 &&
         ppos.y >= wpos.y && ppos.y < wpos.y + 1 &&
         ppos.z >= wpos.z && ppos.z < wpos.z + 1) {
-      float3 v = getVelocityFromGridCell(ppos - make_float3(wpos), gridvel,
-                                         valid, component);
+      float3 v = getVelocityFromGridCell(ppos - make_float3(wpos),
+                                         gridvel, valid, component);
       uint idx = sc_pnt_clr[sc_off[sc_id] + j];
       switch (component) {
       case Component::X:

@@ -35,14 +35,14 @@ inline void getNeighborCellIndices(int3 cellidx, int3 (&indices)[8]) {
 }
 
 __host__ __device__
-inline float3 offsetGrid(FluidParams fp, float3 ppos, Component component) {
+inline float3 offsetGrid(Component component) {
   switch (component) {
   case Component::X:
-    return ppos - make_float3(0.0f, fp.h / 2.0f, fp.h / 2.0f);
+    return make_float3(0.0f, 0.5f, 0.5f);
   case Component::Y:
-    return ppos - make_float3(fp.h / 2.0f, 0.0f, fp.h / 2.0f);
+    return make_float3(0.5f, 0.0f, 0.5f);
   case Component::Z:
-    return ppos - make_float3(fp.h / 2.0f, fp.h / 2.0f, 0.0f);
+    return make_float3(0.5f, 0.5f, 0.0f);
   };
 }
 

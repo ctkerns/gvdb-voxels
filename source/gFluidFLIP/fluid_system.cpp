@@ -49,10 +49,9 @@ FluidSystem::FluidSystem() {
 
   fp.gridres = make_int3(CELLS_X, CELLS_Y, CELLS_Z); // TODO: Why do we have to
                                                      // define here again?
-  fp.h = 1.0;
+  fp.h = 0.01;
   fp.dt = 1.0f / (12.0f * 30.0f);
   fp.gravity = make_float3(0.0f, -9.8f, 0.0f);
-  fp.gravity *= 30.0f; // Unit scale. TODO: Remove this.
   fp.numpnts = (fp.gridres.x) * (fp.gridres.y) * (fp.gridres.z);
   fp.density = 1000.0f;
   fp.radius = 0.5f * fp.h;
@@ -145,7 +144,7 @@ void FluidSystem::run(VolumeGVDB &gvdb) {
   transferToCUDA();
 
 #ifdef CPU_SIM
-  gvdb.ScalePntPos(fp.numpnts, 1.0f / fp.h);
+  gvdb.ScalePntPos(fp.numpnts, 1.0f / fp.h); // Convert to grid space
   integrateParticles();
   handleParticleCollision();
   transferToGrid();
@@ -158,8 +157,13 @@ void FluidSystem::run(VolumeGVDB &gvdb) {
   applyPressure();
   transferFromGrid();
 #else // GPU_SIM
+  if (!firstRun) {
+    gvdb.ScalePntPos(fp.numpnts, 1.0f * fp.h);
+  }
+  firstRun = false;
   integrateParticlesCUDA();
   handleParticleCollisionCUDA();
+  gvdb.ScalePntPos(fp.numpnts, 1.0f / fp.h);
   transferToGridCUDA(gvdb);
   updateCellsCUDA(gvdb);
   computeDivergenceCUDA(gvdb);
@@ -212,7 +216,7 @@ void FluidSystem::handleParticleCollision() {
 }
 
 Vector3DF FluidSystem::getVelocityFromGrid(Vector3DF pos, Component component) {
-  float3 ppos = offsetGrid(fp, make_float3(pos.x, pos.y, pos.z), component);
+  float3 ppos = make_float3(pos.x, pos.y, pos.z) - fp.h * offsetGrid(component);
   int3 cellidx = make_int3(ppos.x / fp.h, ppos.y / fp.h, ppos.z / fp.h);
 
   int3 cellIndices[8];
@@ -243,7 +247,7 @@ Vector3DF FluidSystem::getVelocityFromGrid(Vector3DF pos, Component component) {
 
 float FluidSystem::addVelocityFromParticle(Vector3DF pos, Vector3DF vel,
                                            Component component) {
-  float3 ppos = offsetGrid(fp, make_float3(pos.x, pos.y, pos.z), component);
+  float3 ppos = make_float3(pos.x, pos.y, pos.z) - fp.h * offsetGrid(component);
   int3 cellidx = make_int3(ppos.x / fp.h, ppos.y / fp.h, ppos.z / fp.h);
 
   // Weights for each corner.
