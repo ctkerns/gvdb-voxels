@@ -49,48 +49,26 @@ public:
 
   float m_radius;
   Vector3DF m_origin;
-  float m_renderscale;
 
   int m_w, m_h;
   int m_numpnts;
   DataPtr m_pos;
   DataPtr m_vel;
   DataPtr m_clr;
-  int m_shade_style;
   int gl_screen_tex;
   int mouse_down;
   bool m_render_optix;
   bool m_show_points;
   bool m_show_topo;
 
-  std::string m_infile;
-
   bool m_info;
 };
 
 Sample sample_obj;
 
-void handle_gui(int gui, float val) {
-  switch (gui) {
-  case 3: { // Shading gui changed
-    float alpha =
-        (val == 4)
-            ? 0.03f
-            : 0.8f; // when in volume mode (#4), make volume very transparent
-    gvdb.getScene()->LinearTransferFunc(0.00f, 0.50f, Vector4DF(0, 0, 1, 0),
-                                        Vector4DF(0.0f, 1, 0, 0.1f));
-    gvdb.getScene()->LinearTransferFunc(0.50f, 1.0f,
-                                        Vector4DF(0.0f, 1, 0, 0.1f),
-                                        Vector4DF(1.0f, .0f, 0, 0.1f));
-    gvdb.CommitTransferFunc();
-  } break;
-  }
-}
-
 void Sample::start_guis(int w, int h) {
   clearGuis();
   setview2D(w, h);
-  guiSetCallback(handle_gui);
   addGui(10, h - 30, 130, 20, "Points", GUI_CHECK, GUI_BOOL, &m_show_points, 0,
          1.0f);
   addGui(150, h - 30, 130, 20, "Topology", GUI_CHECK, GUI_BOOL, &m_show_topo, 0,
@@ -171,27 +149,9 @@ void Sample::RebuildOptixGraph(int shading) {
   nvprintf("Rebuild Optix.. Done.\n");
 }
 
-Sample::Sample() {
-  m_renderscale = 2.0;
-  m_infile = "teapot.scn";
-}
+Sample::Sample() {}
 
-void Sample::on_arg(std::string arg, std::string val) {
-  if (arg.compare("-in") == 0) {
-    m_infile = val;
-    nvprintf("input: %s\n", m_infile.c_str());
-  }
-
-  if (arg.compare("-info") == 0) {
-    nvprintf("print gvdb info\n");
-    m_info = true;
-  }
-
-  if (arg.compare("-scale") == 0) {
-    m_renderscale = strToNum(val);
-    nvprintf("render scale: %f\n", m_renderscale);
-  }
-}
+void Sample::on_arg(std::string arg, std::string val) {}
 
 bool Sample::init() {
   m_w = getWidth(); // window width & height
@@ -201,7 +161,6 @@ bool Sample::init() {
   m_show_topo = false;
   m_radius = 1.0f;
   m_origin = Vector3DF(0, 0, 0);
-  m_shade_style = 5;
 
   m_show_points = false;
   m_render_optix = true;
@@ -251,7 +210,10 @@ bool Sample::init() {
   createScreenQuadGL(&gl_screen_tex, m_w, m_h);
 
   // Configure
-  gvdb.Configure(3, 3, 3, 3, 3);
+  gvdb.Configure(3, 3, 3, 3, 5);
+  // int r[2] = {3, 5};
+  // int n[2] = {1, 1};
+  // gvdb.Configure(2, r, n);
   gvdb.AddChannel(CHAN_LEVEL_SET, T_FLOAT, 1, F_LINEAR);
   gvdb.AddChannel(CHAN_VELOCITY, T_FLOAT3, 1);
   gvdb.AddChannel(CHAN_CELL_TYPE, T_UCHAR, 1);
@@ -264,7 +226,7 @@ bool Sample::init() {
 
   // Initialize fluid sim
   fluid.setup();
-  m_numpnts = fluid.getPoints().size();
+  m_numpnts = fluid.getNumPoints();
 
   // Load input data
   gvdb.SetDataGPU(m_pos, m_numpnts, fluid.getPosGPU(), 0,
@@ -309,9 +271,7 @@ void Sample::simulate() {
   gvdb.SetPoints(m_pos, m_vel, m_clr);
 
   // Run fluid simulation
-  PERF_PUSH("Simulate");
   fluid.run(gvdb);
-  PERF_POP();
 
   DataPtr temp;
   gvdb.SetPoints(m_pos, m_vel, temp);
@@ -331,7 +291,6 @@ void Sample::simulate() {
   // gvdb.FreeData(readback);
 
   // Gather points to level set
-  PERF_PUSH("Points-to-Voxels");
   gvdb.ClearChannel(CHAN_LEVEL_SET);
 
   int scPntLen = 0;
@@ -341,12 +300,9 @@ void Sample::simulate() {
   gvdb.GatherLevelSet_FP16(subcell_size, m_numpnts, m_radius, m_origin,
                            scPntLen, CHAN_LEVEL_SET, 0);
   gvdb.UpdateApron(CHAN_LEVEL_SET, 3.0f);
-  PERF_POP();
 
   if (m_render_optix) {
-    PERF_PUSH("Update OptiX");
     optx.UpdateVolume(&gvdb); // GVDB topology has changed
-    PERF_POP();
   }
 
   if (m_info) {
@@ -359,44 +315,14 @@ void Sample::render_frame() {
   // Render frame
   gvdb.getScene()->SetCrossSection(m_origin, Vector3DF(0, 0, -1));
 
-  int sh;
-  switch (m_shade_style) {
-  case 0:
-    sh = SHADE_OFF;
-    break;
-  case 1:
-    sh = SHADE_VOXEL;
-    break;
-  case 2:
-    sh = SHADE_EMPTYSKIP;
-    break;
-  case 3:
-    sh = SHADE_SECTION3D;
-    break;
-  case 4:
-    sh = SHADE_VOLUME;
-    break;
-  case 5:
-    sh = SHADE_LEVELSET;
-    break;
-  };
-
   if (m_render_optix) {
     // OptiX render
-    PERF_PUSH("Raytrace");
     optx.Render(&gvdb, SHADE_LEVELSET, 0);
-    PERF_POP();
-    PERF_PUSH("ReadToGL");
     optx.ReadOutputTex(gl_screen_tex);
-    PERF_POP();
   } else {
     // CUDA render
-    PERF_PUSH("Raytrace");
-    gvdb.Render(sh, 0, 0);
-    PERF_POP();
-    PERF_PUSH("ReadToGL");
+    gvdb.Render(SHADE_LEVELSET, 0, 0);
     gvdb.ReadRenderTexGL(0, gl_screen_tex);
-    PERF_POP();
   }
   renderScreenQuadGL(gl_screen_tex); // Render screen-space quad with texture
 }
@@ -424,6 +350,7 @@ void Sample::draw_topology() {
 }
 
 void Sample::draw_points() {
+  gvdb.RetrieveData(m_pos);
   Vector3DF *fpos = (Vector3DF *)m_pos.cpu;
 
   Vector3DF p1, p2;
@@ -432,6 +359,7 @@ void Sample::draw_points() {
   Camera3D *cam = gvdb.getScene()->getCamera();
   start3D(cam);
   for (int n = 0; n < m_numpnts; n++) {
+    nvprintf("%x\n", fpos);
     p1 = *fpos++;
     p2 = p1 + Vector3DF(0.01f, 0.01f, 0.01f);
     c = p1 / Vector3DF(256.0, 256, 256);

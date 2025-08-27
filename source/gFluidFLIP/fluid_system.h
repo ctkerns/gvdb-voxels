@@ -40,7 +40,7 @@ private:
 
   // Cells.
   static const int numcells = CELLS_X * CELLS_Y * CELLS_Z;
-  std::array<CellType, numcells> celltype; // TODO: Don't leave some uninit.
+  std::array<CellType, numcells> celltype;
   std::array<Vector3DF, numcells> cellvel;
   std::array<Vector3DF, numcells> r;
   std::array<float, numcells> particleDensity;
@@ -49,7 +49,7 @@ private:
   std::vector<float> p_tmp;
 
   inline int getCellIdx(int x, int y, int z) {
-    return x * gridres.y * gridres.z + y * gridres.z + z;
+    return x * CELLS_Y * CELLS_Z + y * CELLS_Z + z;
   }
   inline int getCellIdx(Vector3DI idx) {
     return getCellIdx(idx.x, idx.y, idx.z);
@@ -76,7 +76,7 @@ public:
   void setup();
   void run(VolumeGVDB &gvdb);
 
-  std::vector<Vector3DF> getPoints() { return pos; }
+  int getNumPoints() { return pos.size(); }
   CUdeviceptr getPosGPU() { return cu_pos; }
   CUdeviceptr getVelGPU() { return cu_vel; }
 
@@ -106,7 +106,6 @@ public:
   void applyPressureCUDA(VolumeGVDB &gvdb);
 
   // Simulation parameters.
-  const Vector3DI gridres = Vector3DI(CELLS_X, CELLS_Y, CELLS_Z);
   const int solveIters = 200;
   const float overRelaxation = 1.9f;
   FluidParams fp;

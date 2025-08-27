@@ -65,7 +65,6 @@ __global__ void transferToGrid(VDBInfo *gvdb, int num_sc, Component component,
     float3 ppos = sc_pnt_pos[sc_off[sc_id] + j];
     ppos -= offsetGrid(component);
 
-    // TODO this could be done easier.
     // Only take into account particles within 2x2x2 grid.
     if (ppos.x >= wpos.x - 1 && ppos.x < wpos.x + 1 &&
         ppos.y >= wpos.y - 1 && ppos.y < wpos.y + 1 &&
@@ -128,6 +127,7 @@ __global__ void transferFromGrid(VDBInfo *gvdb, int num_sc, Component component,
 
   bool valid[8];
   for (int i = 0; i < 8; i++) {
+    // TODO: This could be more efficient?
     CellType c1 = (CellType)surf3Dread<uchar>(gvdb->volOut[CHAN_CELL_TYPE],
                                               cell[i].x * sizeof(uchar),
                                               cell[i].y, cell[i].z);
@@ -141,11 +141,9 @@ __global__ void transferFromGrid(VDBInfo *gvdb, int num_sc, Component component,
     float3 ppos = sc_pnt_pos[sc_off[sc_id] + j];
     ppos -= offsetGrid(component);
 
-    // TODO: This could be done way easier.
     // Only take into account particles within this cell.
-    if (ppos.x >= wpos.x && ppos.x < wpos.x + 1 &&
-        ppos.y >= wpos.y && ppos.y < wpos.y + 1 &&
-        ppos.z >= wpos.z && ppos.z < wpos.z + 1) {
+    if (int(ppos.x) == wpos.x && int(ppos.y) == wpos.y &&
+        int(ppos.z) == wpos.z) {
       float3 v = getVelocityFromGridCell(ppos - make_float3(wpos),
                                          gridvel, valid, component);
       uint idx = sc_pnt_clr[sc_off[sc_id] + j];

@@ -47,8 +47,7 @@ Vector3DF lerp3(Vector3DF v1, Vector3DF v2, Vector3DF t) {
 FluidSystem::FluidSystem() {
   for (int n=0; n < FUNC_MAX; n++ ) m_Func[n] = (CUfunction) -1;
 
-  fp.gridres = make_int3(CELLS_X, CELLS_Y, CELLS_Z); // TODO: Why do we have to
-                                                     // define here again?
+  fp.gridres = make_int3(CELLS_X, CELLS_Y, CELLS_Z);
   fp.h = 0.01;
   fp.dt = 1.0f / (12.0f * 30.0f);
   fp.gravity = make_float3(0.0f, -9.8f, 0.0f);
@@ -134,6 +133,8 @@ void FluidSystem::setup() {
         if (i == 0 || j == 0 || k == 0 || i == fp.gridres.x - 1 ||
             j == fp.gridres.y - 1 || k == fp.gridres.z - 1) {
           celltype[getCellIdx(i, j, k)] = CellType::Solid;
+        } else {
+          celltype[getCellIdx(i, j, k)] = CellType::Air;
         }
       }
     }
@@ -141,7 +142,7 @@ void FluidSystem::setup() {
 }
 
 void FluidSystem::run(VolumeGVDB &gvdb) {
-  transferToCUDA();
+transferToCUDA();
 
 #ifdef CPU_SIM
   gvdb.ScalePntPos(fp.numpnts, 1.0f / fp.h); // Convert to grid space
