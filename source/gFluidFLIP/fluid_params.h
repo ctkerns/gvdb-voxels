@@ -15,6 +15,9 @@
 
 typedef struct FluidParams {
   int3 gridres;
+  int subcell;
+  int block;
+  int subcellPerBlock;
   int numpnts;
   float h;
   float dt;

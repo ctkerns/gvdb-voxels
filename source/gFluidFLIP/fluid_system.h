@@ -65,7 +65,7 @@ private:
   CUfunction m_Func[FUNC_MAX];
 
   bool mbDebug = true;
-  bool firstRun = true;
+  int frame = 0;
 
 public:
   FluidSystem();
@@ -110,13 +110,8 @@ public:
   const float overRelaxation = 1.9f;
   FluidParams fp;
   CUdeviceptr cu_fp;
-  int subcell = 4;
 
   const int threadsPerBlock = 512;
   int numThreads;
   int numBlocks;
 };
-
-template <typename T> T clamp(T x, T min, T max) {
-  return std::max(min, std::min(x, max));
-}

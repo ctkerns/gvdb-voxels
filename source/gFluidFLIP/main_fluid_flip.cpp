@@ -44,7 +44,7 @@ public:
   void simulate();
   void start_guis(int w, int h);
   void ClearOptix();
-  void RebuildOptixGraph(int shading);
+  void RebuildOptixGraph();
   void ReportMemory();
 
   float m_radius;
@@ -77,7 +77,7 @@ void Sample::start_guis(int w, int h) {
 
 void Sample::ClearOptix() { optx.ClearGraph(); }
 
-void Sample::RebuildOptixGraph(int shading) {
+void Sample::RebuildOptixGraph() {
   char filepath[1024];
 
   optx.ClearGraph();
@@ -110,21 +110,7 @@ void Sample::RebuildOptixGraph(int shading) {
 
   // Add GVDB volume to the OptiX scene
   nvprintf("Adding GVDB Volume to OptiX graph.\n");
-  char isect;
-  switch (shading) {
-  case SHADE_TRILINEAR:
-    isect = 'S';
-    break;
-  case SHADE_VOLUME:
-    isect = 'D';
-    break;
-  case SHADE_LEVELSET:
-    isect = 'L';
-    break;
-  case SHADE_EMPTYSKIP:
-    isect = 'E';
-    break;
-  }
+
   // Get the dimensions of the volume by looking at how the fluid system was
   // initialized (since at this moment, gvdb.getVolMin and gvdb.getVolMax
   // are both 0).
@@ -132,7 +118,7 @@ void Sample::RebuildOptixGraph(int shading) {
   Vector3DF volmax = gvdb.getVolMax();
   Matrix4F xform = gvdb.getTransform();
   int atlas_glid = gvdb.getAtlasGLID(0);
-  optx.AddVolume(atlas_glid, volmin, volmax, xform, m_mat_surf1, isect);
+  optx.AddVolume(atlas_glid, volmin, volmax, xform, m_mat_surf1, 'L');
 
   // Set Transfer Function (once before validate)
   Vector4DF *src = gvdb.getScene()->getTransferFunc();
@@ -164,6 +150,8 @@ bool Sample::init() {
 
   m_show_points = false;
   m_render_optix = true;
+
+  m_info = false;
 
   init2D("arial");
 
@@ -237,7 +225,7 @@ bool Sample::init() {
 
   // Rebuild the Optix scene graph with GVDB
   if (m_render_optix)
-    RebuildOptixGraph(SHADE_LEVELSET);
+    RebuildOptixGraph();
 
   return true;
 }

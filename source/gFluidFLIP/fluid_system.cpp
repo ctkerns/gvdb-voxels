@@ -48,6 +48,9 @@ FluidSystem::FluidSystem() {
   for (int n=0; n < FUNC_MAX; n++ ) m_Func[n] = (CUfunction) -1;
 
   fp.gridres = make_int3(CELLS_X, CELLS_Y, CELLS_Z);
+  fp.subcell = 2;
+  fp.block = 4;
+  fp.subcellPerBlock = static_cast<int>(pow(fp.block / fp.subcell, 3));
   fp.h = 0.01;
   fp.dt = 1.0f / (12.0f * 30.0f);
   fp.gravity = make_float3(0.0f, -9.8f, 0.0f);
@@ -142,7 +145,11 @@ void FluidSystem::setup() {
 }
 
 void FluidSystem::run(VolumeGVDB &gvdb) {
-transferToCUDA();
+  if (frame > 100) {
+    assert(false);
+    nvprintf("Simulation finished, exiting");
+  }
+  transferToCUDA();
 
 #ifdef CPU_SIM
   gvdb.ScalePntPos(fp.numpnts, 1.0f / fp.h); // Convert to grid space
@@ -158,10 +165,9 @@ transferToCUDA();
   applyPressure();
   transferFromGrid();
 #else // GPU_SIM
-  if (!firstRun) {
+  if (frame > 0) {
     gvdb.ScalePntPos(fp.numpnts, 1.0f * fp.h);
   }
-  firstRun = false;
   integrateParticlesCUDA();
   handleParticleCollisionCUDA();
   gvdb.ScalePntPos(fp.numpnts, 1.0f / fp.h);
@@ -175,6 +181,8 @@ transferToCUDA();
   cuCtxSynchronize();
   transferFromCUDA(); // CPU readback. TODO: Can we avoid this?
 #endif
+
+  frame++;
 }
 
 // Apply gravity and velocity.
@@ -592,10 +600,11 @@ void FluidSystem::transferToGridCUDA(VolumeGVDB &gvdb) {
   if (num_brick == 0) return;
 
   CUdeviceptr cuVDBInfo = gvdb.getCUVDBInfo();
-  int numSCell = static_cast<int>(pow(gvdb.getRes(0) / subcell, 3)) * num_brick;
+  int numSCell =
+      static_cast<int>(pow(gvdb.getRes(0) / fp.subcell, 3)) * num_brick;
   int pntlen = 0;
   float radius = 0.5f;
-  gvdb.InsertPointsSubcell(subcell, fp.numpnts, radius,
+  gvdb.InsertPointsSubcell(fp.subcell, fp.numpnts, radius,
                            Vector3DF(0.0f, 0.0f, 0.0f), pntlen);
 
   Component component;
@@ -612,18 +621,24 @@ void FluidSystem::transferToGridCUDA(VolumeGVDB &gvdb) {
   gvdb.ClearChannel(CHAN_VELOCITY);
 
   component = Component::X;
-  cuCheck(cuLaunchKernel(m_Func[FUNC_TRANSFER_TO_GRID], numSCell, 1, 1, subcell,
-                         subcell, subcell, 0, NULL, args, NULL),
+  cuCheck(cuLaunchKernel(m_Func[FUNC_TRANSFER_TO_GRID],
+                         numSCell / fp.subcellPerBlock, 1, 1,
+                         fp.subcell * fp.subcellPerBlock, fp.subcell,
+                         fp.subcell, 0, NULL, args, NULL),
           "transferToGridCUDA", "cuLaunch", "FUNC_TRANSFER_TO_GRID", mbDebug);
 
   component = Component::Y;
-  cuCheck(cuLaunchKernel(m_Func[FUNC_TRANSFER_TO_GRID], numSCell, 1, 1, subcell,
-                         subcell, subcell, 0, NULL, args, NULL),
+  cuCheck(cuLaunchKernel(m_Func[FUNC_TRANSFER_TO_GRID],
+                         numSCell / fp.subcellPerBlock, 1, 1,
+                         fp.subcell * fp.subcellPerBlock, fp.subcell,
+                         fp.subcell, 0, NULL, args, NULL),
           "transferToGridCUDA", "cuLaunch", "FUNC_TRANSFER_TO_GRID", mbDebug);
 
   component = Component::Z;
-  cuCheck(cuLaunchKernel(m_Func[FUNC_TRANSFER_TO_GRID], numSCell, 1, 1, subcell,
-                         subcell, subcell, 0, NULL, args, NULL),
+  cuCheck(cuLaunchKernel(m_Func[FUNC_TRANSFER_TO_GRID],
+                         numSCell / fp.subcellPerBlock, 1, 1,
+                         fp.subcell * fp.subcellPerBlock, fp.subcell,
+                         fp.subcell, 0, NULL, args, NULL),
           "transferToGridCUDA", "cuLaunch", "FUNC_TRANSFER_TO_GRID", mbDebug);
 }
 
@@ -632,7 +647,8 @@ void FluidSystem::transferFromGridCUDA(VolumeGVDB &gvdb) {
   if (num_brick == 0) return;
 
   CUdeviceptr cuVDBInfo = gvdb.getCUVDBInfo();
-  int numSCell = static_cast<int>(pow(gvdb.getRes(0) / subcell, 3)) * num_brick;
+  int numSCell =
+      static_cast<int>(pow(gvdb.getRes(0) / fp.subcell, 3)) * num_brick;
   Component component;
   int pntlen = 0;
 
@@ -648,20 +664,26 @@ void FluidSystem::transferFromGridCUDA(VolumeGVDB &gvdb) {
                     &gvdb.getAux(AUX_PNTVEL).gpu};
 
   component = Component::X;
-  cuCheck(cuLaunchKernel(m_Func[FUNC_TRANSFER_FROM_GRID], numSCell, 1, 1,
-                         subcell, subcell, subcell, 0, NULL, args, NULL),
+  cuCheck(cuLaunchKernel(m_Func[FUNC_TRANSFER_FROM_GRID],
+                         numSCell / fp.subcellPerBlock, 1, 1,
+                         fp.subcell * fp.subcellPerBlock, fp.subcell,
+                         fp.subcell, 0, NULL, args, NULL),
           "transferFromGridCUDA", "cuLaunch", "FUNC_TRANSFER_FROM_GRID",
           mbDebug);
 
   component = Component::Y;
-  cuCheck(cuLaunchKernel(m_Func[FUNC_TRANSFER_FROM_GRID], numSCell, 1, 1,
-                         subcell, subcell, subcell, 0, NULL, args, NULL),
+  cuCheck(cuLaunchKernel(m_Func[FUNC_TRANSFER_FROM_GRID],
+                         numSCell / fp.subcellPerBlock, 1, 1,
+                         fp.subcell * fp.subcellPerBlock, fp.subcell,
+                         fp.subcell, 0, NULL, args, NULL),
           "transferFromGridCUDA", "cuLaunch", "FUNC_TRANSFER_FROM_GRID",
           mbDebug);
 
   component = Component::Z;
-  cuCheck(cuLaunchKernel(m_Func[FUNC_TRANSFER_FROM_GRID], numSCell, 1, 1,
-                         subcell, subcell, subcell, 0, NULL, args, NULL),
+  cuCheck(cuLaunchKernel(m_Func[FUNC_TRANSFER_FROM_GRID],
+                         numSCell / fp.subcellPerBlock, 1, 1,
+                         fp.subcell * fp.subcellPerBlock, fp.subcell,
+                         fp.subcell, 0, NULL, args, NULL),
           "transferFromGridCUDA", "cuLaunch", "FUNC_TRANSFER_FROM_GRID",
           mbDebug);
 }
@@ -673,14 +695,17 @@ void FluidSystem::updateCellsCUDA(VolumeGVDB &gvdb) {
   if (num_brick == 0) return;
 
   CUdeviceptr cuVDBInfo = gvdb.getCUVDBInfo();
-  int numSCell = static_cast<int>(pow(gvdb.getRes(0) / subcell, 3)) * num_brick;
+  int numSCell =
+      static_cast<int>(pow(gvdb.getRes(0) / fp.subcell, 3)) * num_brick;
 
   void *argsGravity[4] = {&cuVDBInfo, &numSCell,
                          &gvdb.getAux(AUX_SUBCELL_NID).gpu,
                          &gvdb.getAux(AUX_SUBCELL_POS).gpu};
 
-  cuCheck(cuLaunchKernel(m_Func[FUNC_APPLY_GRAVITY], numSCell, 1, 1, subcell,
-                         subcell, subcell, 0, NULL, argsGravity, NULL),
+  cuCheck(cuLaunchKernel(m_Func[FUNC_APPLY_GRAVITY],
+                         numSCell / fp.subcellPerBlock, 1, 1,
+                         fp.subcell * fp.subcellPerBlock, fp.subcell,
+                         fp.subcell, 0, NULL, argsGravity, NULL),
           "updateCellsCUDA", "cuLaunch", "FUNC_APPLY_GRAVITY", mbDebug);
 
   gvdb.UpdateApron(CHAN_VELOCITY);
@@ -693,8 +718,9 @@ void FluidSystem::updateCellsCUDA(VolumeGVDB &gvdb) {
                     &gvdb.getAux(AUX_SUBCELL_POS).gpu,
                     &gvdb.getAux(AUX_SUBCELL_PNT_POS).gpu};
 
-  cuCheck(cuLaunchKernel(m_Func[FUNC_MARK_CELLS], numSCell, 1, 1, subcell,
-                         subcell, subcell, 0, NULL, argsMark, NULL),
+  cuCheck(cuLaunchKernel(m_Func[FUNC_MARK_CELLS], numSCell / fp.subcellPerBlock,
+                         1, 1, fp.subcell * fp.subcellPerBlock, fp.subcell,
+                         fp.subcell, 0, NULL, argsMark, NULL),
           "updateCellsCUDA", "cuLaunch", "FUNC_MARK_CELLS", mbDebug);
 
   gvdb.UpdateApron(CHAN_CELL_TYPE);
@@ -707,14 +733,16 @@ void FluidSystem::computeDivergenceCUDA(VolumeGVDB &gvdb) {
   if (num_brick == 0) return;
 
   CUdeviceptr cuVDBInfo = gvdb.getCUVDBInfo();
-  int numSCell = static_cast<int>(pow(gvdb.getRes(0) / subcell, 3)) * num_brick;
+  int numSCell =
+      static_cast<int>(pow(gvdb.getRes(0) / fp.subcell, 3)) * num_brick;
 
-  void *args[4] = {&cuVDBInfo, &numSCell,
-                         &gvdb.getAux(AUX_SUBCELL_NID).gpu,
-                         &gvdb.getAux(AUX_SUBCELL_POS).gpu};
+  void *args[4] = {&cuVDBInfo, &numSCell, &gvdb.getAux(AUX_SUBCELL_NID).gpu,
+                   &gvdb.getAux(AUX_SUBCELL_POS).gpu};
 
-  cuCheck(cuLaunchKernel(m_Func[FUNC_COMPUTE_DIVERGENCE], numSCell, 1, 1,
-                         subcell, subcell, subcell, 0, NULL, args, NULL),
+  cuCheck(cuLaunchKernel(m_Func[FUNC_COMPUTE_DIVERGENCE],
+                         numSCell / fp.subcellPerBlock, 1, 1,
+                         fp.subcell * fp.subcellPerBlock, fp.subcell,
+                         fp.subcell, 0, NULL, args, NULL),
           "computeDivergenceCUDA", "cuLaunch", "FUNC_COMPUTE_DIVERGENCE",
           mbDebug);
 }
@@ -724,17 +752,23 @@ void FluidSystem::solveJacobiCUDA(VolumeGVDB &gvdb) {
   if (num_brick == 0) return;
 
   CUdeviceptr cuVDBInfo = gvdb.getCUVDBInfo();
-  int numSCell = static_cast<int>(pow(gvdb.getRes(0) / subcell, 3)) * num_brick;
+  int numSCell =
+      static_cast<int>(pow(gvdb.getRes(0) / fp.subcell, 3)) * num_brick;
 
   int p_chan = CHAN_PRESSURE;
   int p_tmp_chan = CHAN_PRESSURE_TMP;
-  void *args[6] = {&cuVDBInfo, &numSCell, &p_chan, &p_tmp_chan,
-                         &gvdb.getAux(AUX_SUBCELL_NID).gpu,
-                         &gvdb.getAux(AUX_SUBCELL_POS).gpu};
+  void *args[6] = {&cuVDBInfo,
+                   &numSCell,
+                   &p_chan,
+                   &p_tmp_chan,
+                   &gvdb.getAux(AUX_SUBCELL_NID).gpu,
+                   &gvdb.getAux(AUX_SUBCELL_POS).gpu};
 
   for (int i = 0; i < solveIters; i++) {
-    cuCheck(cuLaunchKernel(m_Func[FUNC_SOLVE_JACOBI], numSCell, 1, 1, subcell,
-                           subcell, subcell, 0, NULL, args, NULL),
+    cuCheck(cuLaunchKernel(m_Func[FUNC_SOLVE_JACOBI],
+                           numSCell / fp.subcellPerBlock, 1, 1,
+                           fp.subcell * fp.subcellPerBlock, fp.subcell,
+                           fp.subcell, 0, NULL, args, NULL),
             "solveJacobiCUDA", "cuLaunch", "FUNC_SOLVE_JACOBI", mbDebug);
 
     // Swap pressure buffers.
@@ -750,16 +784,18 @@ void FluidSystem::applyPressureCUDA(VolumeGVDB &gvdb) {
   if (num_brick == 0) return;
 
   CUdeviceptr cuVDBInfo = gvdb.getCUVDBInfo();
-  int numSCell = static_cast<int>(pow(gvdb.getRes(0) / subcell, 3)) * num_brick;
+  int numSCell =
+      static_cast<int>(pow(gvdb.getRes(0) / fp.subcell, 3)) * num_brick;
 
   void *args[4] = {&cuVDBInfo, &numSCell,
                          &gvdb.getAux(AUX_SUBCELL_NID).gpu,
                          &gvdb.getAux(AUX_SUBCELL_POS).gpu};
 
-  cuCheck(cuLaunchKernel(m_Func[FUNC_APPLY_PRESSURE], numSCell, 1, 1,
-                         subcell, subcell, subcell, 0, NULL, args, NULL),
-          "applyPressureCUDA", "cuLaunch", "FUNC_APPLY_PRESSURE",
-          mbDebug);
+  cuCheck(cuLaunchKernel(m_Func[FUNC_APPLY_PRESSURE],
+                         numSCell / fp.subcellPerBlock, 1, 1,
+                         fp.subcell * fp.subcellPerBlock, fp.subcell,
+                         fp.subcell, 0, NULL, args, NULL),
+          "applyPressureCUDA", "cuLaunch", "FUNC_APPLY_PRESSURE", mbDebug);
 
   gvdb.UpdateApron(CHAN_VELOCITY);
 }
