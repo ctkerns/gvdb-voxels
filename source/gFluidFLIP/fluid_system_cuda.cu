@@ -19,30 +19,25 @@ __global__ void handleParticleCollision(float3 *pos, float3 *vel) {
   if (i > fp.numpnts)
     return;
 
-  float min = fp.h + fp.radius;
-  float maxX = (fp.gridres.x - 1) * fp.h - fp.radius;
-  float maxY = (fp.gridres.y - 1) * fp.h - fp.radius;
-  float maxZ = (fp.gridres.z - 1) * fp.h - fp.radius;
-
-  if (pos[i].x < min) {
-    pos[i].x = min;
+  if (pos[i].x < fp.tankMin.x) {
+    pos[i].x = fp.tankMin.x;
     vel[i].x = 0.0f;
-  } else if (pos[i].x > maxX) {
-    pos[i].x = maxX;
+  } else if (pos[i].x > fp.tankMax.x) {
+    pos[i].x = fp.tankMax.x;
     vel[i].x = 0.0f;
   }
-  if (pos[i].y < min) {
-    pos[i].y = min;
+  if (pos[i].y < fp.tankMin.y) {
+    pos[i].y = fp.tankMin.y;
     vel[i].y = 0.0f;
-  } else if (pos[i].y > maxY) {
-    pos[i].y = maxY;
+  } else if (pos[i].y > fp.tankMax.y) {
+    pos[i].y = fp.tankMax.y;
     vel[i].y = 0.0f;
   }
-  if (pos[i].z < min) {
-    pos[i].z = min;
+  if (pos[i].z < fp.tankMin.z) {
+    pos[i].z = fp.tankMin.z;
     vel[i].z = 0.0f;
-  } else if (pos[i].z > maxZ) {
-    pos[i].z = maxZ;
+  } else if (pos[i].z > fp.tankMax.z) {
+    pos[i].z = fp.tankMax.z;
     vel[i].z = 0.0f;
   }
 }
@@ -51,14 +46,7 @@ __global__ void transferToGrid(VDBInfo *gvdb, int num_sc, Component component,
                                int *sc_nid, int *sc_cnt, int *sc_off,
                                int3 *sc_pos, float3 *sc_pnt_pos,
                                float3 *sc_pnt_vel) {
-  int sc_id = blockIdx.x * fp.subcellPerBlock + (threadIdx.x / fp.subcell);
-  if (sc_id >= num_sc) return;
-
-  int3 idx =
-      make_int3(threadIdx.x % fp.subcell, threadIdx.y, threadIdx.z);
-  int3 wpos = sc_pos[sc_id] + idx; // World voxel position.
-  VDBNode *node = getNode(gvdb, 0, sc_nid[sc_id]);
-  int3 vox = node->mValue + (wpos - node->mPos); // Atlas index of voxel.
+  GVDB_VOXSUBCELL
 
   float3 val = make_float3(0.0f, 0.0f, 0.0f);
   float r = 0.0f;
@@ -105,14 +93,7 @@ __global__ void transferFromGrid(VDBInfo *gvdb, int num_sc, Component component,
                                  int *sc_nid, int *sc_cnt, int *sc_off,
                                  int3 *sc_pos, float3 *sc_pnt_pos,
                                  uint *sc_pnt_clr, float3 *vel) {
-  int sc_id = blockIdx.x * fp.subcellPerBlock + (threadIdx.x / fp.subcell);
-  if (sc_id >= num_sc) return;
-
-  int3 idx =
-      make_int3(threadIdx.x % fp.subcell, threadIdx.y, threadIdx.z);
-  int3 wpos = sc_pos[sc_id] + idx; // World voxel position.
-  VDBNode *node = getNode(gvdb, 0, sc_nid[sc_id]);
-  int3 vox = node->mValue + (wpos - node->mPos); // Atlas index of voxel.
+  GVDB_VOXSUBCELL
   
   int3 cell[8];
   getNeighborCellIndices(vox, cell);
@@ -153,13 +134,13 @@ __global__ void transferFromGrid(VDBInfo *gvdb, int num_sc, Component component,
       uint idx = sc_pnt_clr[sc_off[sc_id] + j];
       switch (component) {
       case Component::X:
-        vel[idx] = make_float3(v.x, 0.0f, 0.0f);
+        vel[idx].x = v.x;
         break;
       case Component::Y:
-        vel[idx] += make_float3(0.0f, v.y, 0.0f);
+        vel[idx].y = v.y;
         break;
       case Component::Z:
-        vel[idx] += make_float3(0.0f, 0.0f, v.z);
+        vel[idx].z = v.z;
         break;
       }
     }
@@ -168,14 +149,7 @@ __global__ void transferFromGrid(VDBInfo *gvdb, int num_sc, Component component,
 
 __global__ void applyGravity(VDBInfo *gvdb, int num_sc, int *sc_nid,
                              int3 *sc_pos) {
-  int sc_id = blockIdx.x * fp.subcellPerBlock + (threadIdx.x / fp.subcell);
-  if (sc_id >= num_sc) return;
-
-  int3 idx =
-      make_int3(threadIdx.x % fp.subcell, threadIdx.y, threadIdx.z);
-  int3 wpos = sc_pos[sc_id] + idx; // World voxel position.
-  VDBNode *node = getNode(gvdb, 0, sc_nid[sc_id]);
-  int3 vox = node->mValue + (wpos - node->mPos); // Atlas index of voxel.
+  GVDB_VOXSUBCELL
 
   float3 val = fxyz(surf3Dread<float4>(gvdb->volOut[CHAN_VELOCITY],
                                        vox.x * sizeof(float4), vox.y, vox.z));
@@ -191,14 +165,7 @@ __global__ void applyGravity(VDBInfo *gvdb, int num_sc, int *sc_nid,
 
 __global__ void markCells(VDBInfo *gvdb, int num_sc, int *sc_nid, int *sc_cnt,
                           int *sc_off, int3 *sc_pos, float3 *sc_pnt_pos) {
-  int sc_id = blockIdx.x * fp.subcellPerBlock + (threadIdx.x / fp.subcell);
-  if (sc_id >= num_sc) return;
-
-  int3 idx =
-      make_int3(threadIdx.x % fp.subcell, threadIdx.y, threadIdx.z);
-  int3 wpos = sc_pos[sc_id] + idx; // World voxel position.
-  VDBNode *node = getNode(gvdb, 0, sc_nid[sc_id]);
-  int3 vox = node->mValue + (wpos - node->mPos); // Atlas index of voxel.
+  GVDB_VOXSUBCELL
 
   for (int j = 0; j < sc_cnt[sc_id]; j++) {
     int3 ppos = make_int3(sc_pnt_pos[sc_off[sc_id] + j]);
@@ -213,14 +180,7 @@ __global__ void markCells(VDBInfo *gvdb, int num_sc, int *sc_nid, int *sc_cnt,
 
 __global__ void computeDivergence(VDBInfo *gvdb, int num_sc, int *sc_nid,
                                   int3 *sc_pos) {
-  int sc_id = blockIdx.x * fp.subcellPerBlock + (threadIdx.x / fp.subcell);
-  if (sc_id >= num_sc) return;
-
-  int3 idx =
-      make_int3(threadIdx.x % fp.subcell, threadIdx.y, threadIdx.z);
-  int3 wpos = sc_pos[sc_id] + idx; // World voxel position.
-  VDBNode *node = getNode(gvdb, 0, sc_nid[sc_id]);
-  int3 vox = node->mValue + (wpos - node->mPos); // Atlas index of voxel.
+  GVDB_VOXSUBCELL
 
   float div = 0.0f;
   div += surf3Dread<float4>(gvdb->volOut[CHAN_VELOCITY],
@@ -240,14 +200,7 @@ __global__ void computeDivergence(VDBInfo *gvdb, int num_sc, int *sc_nid,
 
 __global__ void solveJacobi(VDBInfo *gvdb, int num_sc, int p_chan,
                             int p_tmp_chan, int *sc_nid, int3 *sc_pos) {
-  int sc_id = blockIdx.x * fp.subcellPerBlock + (threadIdx.x / fp.subcell);
-  if (sc_id >= num_sc) return;
-
-  int3 idx =
-      make_int3(threadIdx.x % fp.subcell, threadIdx.y, threadIdx.z);
-  int3 wpos = sc_pos[sc_id] + idx; // World voxel position.
-  VDBNode *node = getNode(gvdb, 0, sc_nid[sc_id]);
-  int3 vox = node->mValue + (wpos - node->mPos); // Atlas index of voxel.
+  GVDB_VOXSUBCELL
 
   // Air cells have zero pressure.
   if (surf3Dread<uchar>(gvdb->volOut[CHAN_CELL_TYPE], vox.x * sizeof(uchar),
@@ -295,14 +248,7 @@ __global__ void solveJacobi(VDBInfo *gvdb, int num_sc, int p_chan,
 }
 
 __global__ void applyPressure(VDBInfo *gvdb, int num_sc, int *sc_nid, int3 *sc_pos) {
-  int sc_id = blockIdx.x * fp.subcellPerBlock + (threadIdx.x / fp.subcell);
-  if (sc_id >= num_sc) return;
-
-  int3 idx =
-      make_int3(threadIdx.x % fp.subcell, threadIdx.y, threadIdx.z);
-  int3 wpos = sc_pos[sc_id] + idx; // World voxel position.
-  VDBNode *node = getNode(gvdb, 0, sc_nid[sc_id]);
-  int3 vox = node->mValue + (wpos - node->mPos); // Atlas index of voxel.
+  GVDB_VOXSUBCELL
 
   float dt_div_rho_0_h = fp.dt / (fp.density * fp.h);
 

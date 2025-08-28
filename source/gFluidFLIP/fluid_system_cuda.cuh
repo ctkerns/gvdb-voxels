@@ -10,6 +10,16 @@
 
 #include "fluid_utils.h"
 
+#define GVDB_VOXSUBCELL \
+  int sc_id = blockIdx.x * fp.subcellPerBlock + (threadIdx.x / fp.subcell); \
+  if (sc_id >= num_sc) return; \
+  \
+  int3 idx = \
+      make_int3(threadIdx.x % fp.subcell, threadIdx.y, threadIdx.z); \
+  int3 wpos = sc_pos[sc_id] + idx; /* World voxel position. */ \
+  VDBNode *node = getNode(gvdb, 0, sc_nid[sc_id]); \
+  int3 vox = node->mValue + (wpos - node->mPos); /* Atlas index of voxel. */
+
 extern "C" {
   __global__ void integrateParticles(float3 *pos, float3 *vel);
   __global__ void handleParticleCollision(float3 *pos, float3 *vel);

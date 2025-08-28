@@ -45,8 +45,9 @@ Vector3DF lerp3(Vector3DF v1, Vector3DF v2, Vector3DF t) {
 }
 
 FluidSystem::FluidSystem() {
-  for (int n=0; n < FUNC_MAX; n++ ) m_Func[n] = (CUfunction) -1;
+  for (int n = 0; n < FUNC_MAX; n++) m_Func[n] = (CUfunction) -1;
 
+  // Simulation parameters.
   fp.gridres = make_int3(CELLS_X, CELLS_Y, CELLS_Z);
   fp.subcell = 2;
   fp.block = 4;
@@ -57,6 +58,28 @@ FluidSystem::FluidSystem() {
   fp.numpnts = (fp.gridres.x) * (fp.gridres.y) * (fp.gridres.z);
   fp.density = 1000.0f;
   fp.radius = 0.5f * fp.h;
+
+  // Tank parameters.
+  Vector3DF relMin(0.1f, 0.1f, 0.1f); // Adjust these to configure starting
+  Vector3DF relMax(0.5f, 0.5f, 0.9f); // fluid.
+
+  fp.tankMin =
+      make_float3(fp.h + fp.radius, fp.h + fp.radius, fp.h + fp.radius);
+  fp.tankMax = make_float3((fp.gridres.x - 1) * fp.h - fp.radius,
+                           (fp.gridres.y - 1) * fp.h - fp.radius,
+                           (fp.gridres.z - 1) * fp.h - fp.radius);
+  fluidMin = lerp3(Vector3DF(fp.tankMin.x, fp.tankMin.y, fp.tankMin.z),
+                   Vector3DF(fp.tankMax.x, fp.tankMax.y, fp.tankMax.z), relMin);
+  fluidMax = lerp3(Vector3DF(fp.tankMin.x, fp.tankMin.y, fp.tankMin.z),
+                   Vector3DF(fp.tankMax.x, fp.tankMax.y, fp.tankMax.z), relMax);
+
+  float pntDensity = 2.0f;
+  tankPnts = Vector3DI(
+    (relMax.x - relMin.x) * fp.gridres.x * pntDensity,
+    (relMax.y - relMin.y) * fp.gridres.y * pntDensity,
+    (relMax.z - relMin.z) * fp.gridres.z * pntDensity
+  );
+  fp.numpnts = tankPnts.x * tankPnts.y * tankPnts.z;
 
   numThreads = (fp.numpnts < threadsPerBlock) ? fp.numpnts : threadsPerBlock;
   numBlocks = (fp.numpnts % numThreads != 0) ? (fp.numpnts / numThreads + 1)
@@ -106,28 +129,28 @@ void FluidSystem::setup() {
   pos = std::vector<Vector3DF>(fp.numpnts);
   vel = std::vector<Vector3DF>(fp.numpnts, Vector3DF(0.0f, 0.0f, 0.0f));
 
-  Vector3DF minlerp(0.2f, 0.4f, 0.2f); // Adjust these to configure starting
-  Vector3DF maxlerp(1.0f, 1.0f, 1.0f); // fluid.
-
-  Vector3DF tankmin(fp.h + fp.radius, fp.h + fp.radius, fp.h + fp.radius);
-  Vector3DF tankmax((fp.gridres.x - 1) * fp.h - fp.radius,
-                    (fp.gridres.y - 1) * fp.h - fp.radius,
-                    (fp.gridres.z - 1) * fp.h - fp.radius);
-  Vector3DF fluidmin = lerp3(tankmin, tankmax, minlerp);
-  Vector3DF fluidmax = lerp3(tankmin, tankmax, maxlerp);
+  nvprintf("Number of particles: %d\n", fp.numpnts);
+  nvprintf("Grid resolution: %d, %d, %d\n", fp.gridres.x, fp.gridres.y,
+           fp.gridres.z);
   int point = 0;
-  for (int i = 0; i < fp.gridres.x; i++) {
-    for (int j = 0; j < fp.gridres.y; j++) {
-      for (int k = 0; k < fp.gridres.z; k++) {
-        Vector3DF lerp(float(i) / (fp.gridres.x - 1),
-                       float(j) / (fp.gridres.y - 1),
-                       float(k) / (fp.gridres.z - 1));
-        pos[point++] = lerp3(fluidmin, fluidmax, lerp);
+  for (int i = 0; i < tankPnts.x; i++) {
+    for (int j = 0; j < tankPnts.y; j++) {
+      for (int k = 0; k < tankPnts.z; k++) {
+        Vector3DF lerp(float(i) / (tankPnts.x - 1),
+                       float(j) / (tankPnts.y - 1),
+                       float(k) / (tankPnts.z - 1));
+        pos[point++] = lerp3(fluidMin, fluidMax, lerp);
       }
     }
   }
 
+#ifdef CPU_SIM
   // Initialize cells.
+  celltype.resize(numcells, CellType::Air);
+  cellvel.resize(numcells);
+  r.resize(numcells);
+  particleDensity.resize(numcells);
+  divergence.resize(numcells);
   p.resize(numcells);
   p_tmp.resize(numcells);
   for (int i = 0; i < fp.gridres.x; i++) {
@@ -136,18 +159,17 @@ void FluidSystem::setup() {
         if (i == 0 || j == 0 || k == 0 || i == fp.gridres.x - 1 ||
             j == fp.gridres.y - 1 || k == fp.gridres.z - 1) {
           celltype[getCellIdx(i, j, k)] = CellType::Solid;
-        } else {
-          celltype[getCellIdx(i, j, k)] = CellType::Air;
-        }
+        } 
       }
     }
   }
+#endif
 }
 
 void FluidSystem::run(VolumeGVDB &gvdb) {
-  if (frame > 100) {
-    assert(false);
+  if (exitFrame >= 0 && frame > exitFrame) {
     nvprintf("Simulation finished, exiting");
+    assert(false);
   }
   transferToCUDA();
 
@@ -194,31 +216,26 @@ void FluidSystem::integrateParticles() {
 
 // Make sure particles do not escape boundary.
 void FluidSystem::handleParticleCollision() {
-  float min = fp.h + fp.radius;
-  float maxX = (fp.gridres.x - 1) * fp.h - fp.radius;
-  float maxY = (fp.gridres.y - 1) * fp.h - fp.radius;
-  float maxZ = (fp.gridres.z - 1) * fp.h - fp.radius;
-
   for (int i = 0; i < fp.numpnts; i++) {
-    if (pos[i].x < min) {
-      pos[i].x = min;
+    if (pos[i].x < fp.tankMin.x) {
+      pos[i].x = fp.tankMin.x;
       vel[i].x = 0.0f;
-    } else if (pos[i].x > maxX) {
-      pos[i].x = maxX;
+    } else if (pos[i].x > fp.tankMax.x) {
+      pos[i].x = fp.tankMax.x;
       vel[i].x = 0.0f;
     }
-    if (pos[i].y < min) {
-      pos[i].y = min;
+    if (pos[i].y < fp.tankMin.y) {
+      pos[i].y = fp.tankMin.y;
       vel[i].y = 0.0f;
-    } else if (pos[i].y > maxY) {
-      pos[i].y = maxY;
+    } else if (pos[i].y > fp.tankMax.y) {
+      pos[i].y = fp.tankMax.y;
       vel[i].y = 0.0f;
     }
-    if (pos[i].z < min) {
-      pos[i].z = min;
+    if (pos[i].z < fp.tankMin.z) {
+      pos[i].z = fp.tankMin.z;
       vel[i].z = 0.0f;
-    } else if (pos[i].z > maxZ) {
-      pos[i].z = maxZ;
+    } else if (pos[i].z > fp.tankMax.z) {
+      pos[i].z = fp.tankMax.z;
       vel[i].z = 0.0f;
     }
   }

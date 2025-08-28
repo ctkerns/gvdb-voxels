@@ -28,7 +28,7 @@ using namespace nvdb;
 
 #define CELLS_X 50
 #define CELLS_Y 50
-#define CELLS_Z 50 
+#define CELLS_Z 50
 
 class FluidSystem {
 private:
@@ -39,12 +39,12 @@ private:
   CUdeviceptr cu_vel;
 
   // Cells.
-  static const int numcells = CELLS_X * CELLS_Y * CELLS_Z;
-  std::array<CellType, numcells> celltype;
-  std::array<Vector3DF, numcells> cellvel;
-  std::array<Vector3DF, numcells> r;
-  std::array<float, numcells> particleDensity;
-  std::array<float, numcells> divergence;
+  static const size_t numcells = CELLS_X * CELLS_Y * CELLS_Z;
+  std::vector<CellType> celltype;
+  std::vector<Vector3DF> cellvel;
+  std::vector<Vector3DF> r;
+  std::vector<float> particleDensity;
+  std::vector<float> divergence;
   std::vector<float> p;
   std::vector<float> p_tmp;
 
@@ -66,6 +66,7 @@ private:
 
   bool mbDebug = true;
   int frame = 0;
+  int exitFrame = -1; // -1 to disable.
 
 public:
   FluidSystem();
@@ -110,6 +111,10 @@ public:
   const float overRelaxation = 1.9f;
   FluidParams fp;
   CUdeviceptr cu_fp;
+
+  // Tank parameters.
+  Vector3DF fluidMin, fluidMax;
+  Vector3DI tankPnts;
 
   const int threadsPerBlock = 512;
   int numThreads;
