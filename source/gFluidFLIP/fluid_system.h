@@ -58,8 +58,6 @@ private:
     return getCellIdx(idx.x, idx.y, idx.z);
   }
 
-  float particleRestDensity = 0.0f;
-
   // CUDA.
   CUmodule m_Module;
   CUfunction m_Func[FUNC_MAX];
@@ -105,10 +103,12 @@ public:
   void computeDivergenceCUDA(VolumeGVDB &gvdb);
   void solveJacobiCUDA(VolumeGVDB &gvdb);
   void applyPressureCUDA(VolumeGVDB &gvdb);
+  float maxResidualGVDB(VolumeGVDB &gvdb);
 
   // Simulation parameters.
   const int solveIters = 200;
   const float overRelaxation = 1.9f;
+  float particleRestDensity = 0.0f;
   FluidParams fp;
   CUdeviceptr cu_fp;
 

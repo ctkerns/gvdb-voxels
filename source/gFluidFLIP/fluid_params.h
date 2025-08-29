@@ -12,6 +12,7 @@
 #define CHAN_DIVERGENCE 3
 #define CHAN_PRESSURE 4
 #define CHAN_PRESSURE_TMP 5
+#define CHAN_RESIDUAL 6
 
 typedef struct FluidParams {
   int3 gridres;
@@ -22,6 +23,8 @@ typedef struct FluidParams {
   int subcellPerBlock;
   int numpnts;
   float h;
+  float h_sq;
+  float c;
   float dt;
   float3 gravity;
   float density;

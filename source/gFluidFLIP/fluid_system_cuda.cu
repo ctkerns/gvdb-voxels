@@ -242,9 +242,13 @@ __global__ void solveJacobi(VDBInfo *gvdb, int num_sc, int p_chan,
   p_sum += surf3Dread<float>(gvdb->volOut[p_chan], vox.x * sizeof(float), vox.y,
                              vox.z + 1);
 
-  float pressure = (p_sum - (fp.h * fp.h * (fp.density / fp.dt)) * div) / s_sum;
+  float pressure = (p_sum - (fp.h_sq * fp.c) * div) / s_sum;
   surf3Dwrite(pressure, gvdb->volOut[p_tmp_chan], vox.x * sizeof(float), vox.y,
               vox.z);
+
+  float residual = abs((s_sum * pressure - p_sum) / fp.h_sq + fp.c * div);
+  surf3Dwrite(residual, gvdb->volOut[CHAN_RESIDUAL], vox.x * sizeof(float),
+              vox.y, vox.z);
 }
 
 __global__ void applyPressure(VDBInfo *gvdb, int num_sc, int *sc_nid, int3 *sc_pos) {

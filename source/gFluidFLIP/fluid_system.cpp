@@ -53,10 +53,12 @@ FluidSystem::FluidSystem() {
   fp.block = 4;
   fp.subcellPerBlock = static_cast<int>(pow(fp.block / fp.subcell, 3));
   fp.h = 0.01;
+  fp.h_sq = fp.h * fp.h;
   fp.dt = 1.0f / (12.0f * 30.0f);
   fp.gravity = make_float3(0.0f, -9.8f, 0.0f);
   fp.numpnts = (fp.gridres.x) * (fp.gridres.y) * (fp.gridres.z);
   fp.density = 1000.0f;
+  fp.c = fp.density / fp.dt;
   fp.radius = 0.5f * fp.h;
 
   // Tank parameters.
@@ -198,6 +200,7 @@ void FluidSystem::run(VolumeGVDB &gvdb) {
   computeDivergenceCUDA(gvdb);
   solveJacobiCUDA(gvdb);
   applyPressureCUDA(gvdb);
+  nvprintf("Max residual: %f\n", maxResidualGVDB(gvdb));
   transferFromGridCUDA(gvdb);
 
   cuCtxSynchronize();
@@ -451,9 +454,6 @@ void FluidSystem::computeDivergence() {
 }
 
 void FluidSystem::solveGaussSeidel() {
-  float c = fp.density / fp.dt;
-  float h_sq = fp.h * fp.h;
-
   float maxResidual = 0.0f;
   for (int iter = 0; iter < solveIters; iter++) {
     for (int i = 1; i < fp.gridres.x - 1; i++) {
@@ -482,12 +482,15 @@ void FluidSystem::solveGaussSeidel() {
           p_sum += p[getCellIdx(i, j, k - 1)];
           p_sum += p[getCellIdx(i, j, k + 1)];
 
-          float newval = (p_sum - (h_sq * c) * div) / s_sum;
-          p[getCellIdx(i, j, k)] = (1.0f - overRelaxation) * p[getCellIdx(i, j, k)] + overRelaxation * newval;
+          float newval = (p_sum - (fp.h_sq * fp.c) * div) / s_sum;
+          p[getCellIdx(i, j, k)] =
+              (1.0f - overRelaxation) * p[getCellIdx(i, j, k)] +
+              overRelaxation * newval;
 
           // Calculate max residual for debugging.
           if (iter == solveIters - 1) {
-            float r = -c * div - (s_sum * p[getCellIdx(i, j, k)] - p_sum) / (h_sq);
+            float r = -fp.c * div -
+                      (s_sum * p[getCellIdx(i, j, k)] - p_sum) / (fp.h_sq);
             if (abs(r) > maxResidual) maxResidual = abs(r);
           }
         }
@@ -499,9 +502,7 @@ void FluidSystem::solveGaussSeidel() {
 }
 
 void FluidSystem::solveJacobi() {
-  float c = fp.density / fp.dt;
-  float h_sq = fp.h * fp.h;
-
+  float maxResidual = 0.0f;
   for (int iter = 0; iter < solveIters; iter++) {
     for (int i = 1; i < fp.gridres.x - 1; i++) {
       for (int j = 1; j < fp.gridres.y - 1; j++) {
@@ -538,12 +539,22 @@ void FluidSystem::solveJacobi() {
           p_sum += p[getCellIdx(i, j, k - 1)];
           p_sum += p[getCellIdx(i, j, k + 1)];
 
-          p_tmp[getCellIdx(i, j, k)] = (p_sum - (h_sq * c) * div) / s_sum;
+          float pressure = (p_sum - (fp.h_sq * fp.c) * div) / s_sum;
+          p_tmp[getCellIdx(i, j, k)] = pressure;
+
+          // Calculate max residual for debugging.
+          float residual =
+              abs((s_sum * pressure - p_sum) / fp.h_sq + fp.c * div);
+
+          if (iter == solveIters - 1) {
+            if (residual > maxResidual) maxResidual = residual;
+          }
         }
       }
     }
     p_tmp.swap(p);
   } 
+  nvprintf("Max residual: %f\n", maxResidual);
 }
 
 void FluidSystem::applyPressure() {
@@ -781,6 +792,9 @@ void FluidSystem::solveJacobiCUDA(VolumeGVDB &gvdb) {
                    &gvdb.getAux(AUX_SUBCELL_NID).gpu,
                    &gvdb.getAux(AUX_SUBCELL_POS).gpu};
 
+  gvdb.ClearChannel(CHAN_PRESSURE);
+  gvdb.ClearChannel(CHAN_PRESSURE_TMP);
+
   for (int i = 0; i < solveIters; i++) {
     cuCheck(cuLaunchKernel(m_Func[FUNC_SOLVE_JACOBI],
                            numSCell / fp.subcellPerBlock, 1, 1,
@@ -815,4 +829,29 @@ void FluidSystem::applyPressureCUDA(VolumeGVDB &gvdb) {
           "applyPressureCUDA", "cuLaunch", "FUNC_APPLY_PRESSURE", mbDebug);
 
   gvdb.UpdateApron(CHAN_VELOCITY);
+}
+
+float FluidSystem::maxResidualGVDB(VolumeGVDB &gvdb) {
+  float maxResidual = 0.0f;
+  DataPtr readback;
+  gvdb.AllocData(readback, gvdb.getVoxCnt(0), sizeof(float4), true);
+  int numLeaves = gvdb.getNumUsedNodes(0);
+  int leafVoxels = gvdb.getVoxCnt(0);
+  for (int leafIdx = 0; leafIdx < numLeaves; leafIdx++) {
+    auto node = gvdb.getNodeAtLevel(leafIdx, 0);
+
+    gvdb.AtlasRetrieveBrickXYZ(CHAN_RESIDUAL, node->mValue, readback);
+    assert(readback.cpu != nullptr);
+
+    float *brickData = reinterpret_cast<float*>(readback.cpu);
+    for (uint32 voxel = 0; voxel < leafVoxels; voxel++) {
+      const float value = brickData[voxel];
+
+      if (abs(value) > maxResidual) {
+        maxResidual = abs(value);
+      }
+    }
+  }
+  gvdb.FreeData(readback);
+  return maxResidual;
 }

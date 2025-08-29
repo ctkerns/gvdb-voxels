@@ -208,6 +208,7 @@ bool Sample::init() {
   gvdb.AddChannel(CHAN_DIVERGENCE, T_FLOAT, 1);
   gvdb.AddChannel(CHAN_PRESSURE, T_FLOAT, 1);
   gvdb.AddChannel(CHAN_PRESSURE_TMP, T_FLOAT, 1);
+  gvdb.AddChannel(CHAN_RESIDUAL, T_FLOAT, 1);
 
   // Initialize GUIs
   start_guis(m_w, m_h);
@@ -268,15 +269,6 @@ void Sample::simulate() {
   gvdb.RebuildTopology(m_numpnts, m_radius * 2.0f, m_origin);
   gvdb.FinishTopology(false, true);
   gvdb.UpdateAtlas();
-
-  // Test Reading back data.
-  // DataPtr readback;
-  // gvdb.AllocData(readback, gvdb.getVoxCnt(0), sizeof(float4), true);
-  // gvdb.AtlasRetrieveBrickXYZ(CHAN_VELOCITY, Vector3DI(0, 0, 0), readback);
-  // assert(readback.cpu != nullptr);
-  // float *reads = reinterpret_cast<float*>(readback.cpu);
-  // nvprintf("%f\n", reads[511]);
-  // gvdb.FreeData(readback);
 
   // Gather points to level set
   gvdb.ClearChannel(CHAN_LEVEL_SET);
