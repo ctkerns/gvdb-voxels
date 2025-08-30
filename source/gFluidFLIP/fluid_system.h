@@ -76,6 +76,7 @@ public:
   void run(VolumeGVDB &gvdb);
 
   int getNumPoints() { return pos.size(); }
+  int getFrame() { return frame; }
   CUdeviceptr getPosGPU() { return cu_pos; }
   CUdeviceptr getVelGPU() { return cu_vel; }
 

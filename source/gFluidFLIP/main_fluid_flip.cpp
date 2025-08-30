@@ -60,6 +60,7 @@ public:
   bool m_render_optix;
   bool m_show_points;
   bool m_show_topo;
+  bool m_save_png;
 
   bool m_info;
 };
@@ -144,12 +145,13 @@ bool Sample::init() {
   m_h = getHeight();
   mouse_down = -1;
   gl_screen_tex = -1;
-  m_show_topo = false;
   m_radius = 1.0f;
   m_origin = Vector3DF(0, 0, 0);
 
-  m_show_points = false;
   m_render_optix = true;
+  m_show_points = false;
+  m_show_topo = false;
+  m_save_png = false;
 
   m_info = false;
 
@@ -355,6 +357,16 @@ void Sample::display() {
 
   // Render frame
   render_frame();
+
+  if (m_save_png && m_render_optix) {
+    // Save current frame to PNG
+    char png_name[1024];
+    std::string pfmt = "img%04d.png";
+    sprintf(png_name, pfmt.c_str(), fluid.getFrame());
+    std::cout << "Save png to " << png_name << " ...";
+    optx.SaveOutput(png_name);
+    std::cout << " Done\n";
+  }
 
   glDisable(GL_DEPTH_TEST);
   glClearDepth(1.0);
