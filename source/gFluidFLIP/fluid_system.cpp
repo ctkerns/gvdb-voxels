@@ -445,7 +445,7 @@ void FluidSystem::computeDivergence() {
         divergence[getCellIdx(i, j, k)] = div;
 
         // Calculate max divergence for debugging.
-        if (div > maxDiv) maxDiv = div;
+        if (abs(div) > abs(maxDiv)) maxDiv = div;
       }
     }
   }
@@ -491,7 +491,7 @@ void FluidSystem::solveGaussSeidel() {
           if (iter == solveIters - 1) {
             float r = -fp.c * div -
                       (s_sum * p[getCellIdx(i, j, k)] - p_sum) / (fp.h_sq);
-            if (abs(r) > maxResidual) maxResidual = abs(r);
+            if (abs(r) > abs(maxResidual)) maxResidual = r;
           }
         }
       }
@@ -530,7 +530,8 @@ void FluidSystem::solveJacobi() {
 
           float div = divergence[getCellIdx(i, j, k)];
 
-          // Neighbor cells' pressures.
+          // Neighbor cells' pressures. Only works when solid pressures are
+          // explicitly set to zero.
           float p_sum = 0.0f;
           p_sum += p[getCellIdx(i - 1, j, k)];
           p_sum += p[getCellIdx(i + 1, j, k)];
@@ -539,15 +540,15 @@ void FluidSystem::solveJacobi() {
           p_sum += p[getCellIdx(i, j, k - 1)];
           p_sum += p[getCellIdx(i, j, k + 1)];
 
-          float pressure = (p_sum - (fp.h_sq * fp.c) * div) / s_sum;
-          p_tmp[getCellIdx(i, j, k)] = pressure;
-
           // Calculate max residual for debugging.
           float residual =
-              abs((s_sum * pressure - p_sum) / fp.h_sq + fp.c * div);
+              (s_sum * p[getCellIdx(i, j, k)] - p_sum) / fp.h_sq + fp.c * div;
+
+          float pressure = (p_sum - fp.h_sq * fp.c * div) / s_sum;
+          p_tmp[getCellIdx(i, j, k)] = pressure;
 
           if (iter == solveIters - 1) {
-            if (residual > maxResidual) maxResidual = residual;
+            if (abs(residual) > abs(maxResidual)) maxResidual = residual;
           }
         }
       }
@@ -794,6 +795,7 @@ void FluidSystem::solveJacobiCUDA(VolumeGVDB &gvdb) {
 
   gvdb.ClearChannel(CHAN_PRESSURE);
   gvdb.ClearChannel(CHAN_PRESSURE_TMP);
+  gvdb.ClearChannel(CHAN_RESIDUAL);
 
   for (int i = 0; i < solveIters; i++) {
     cuCheck(cuLaunchKernel(m_Func[FUNC_SOLVE_JACOBI],
@@ -847,8 +849,8 @@ float FluidSystem::maxResidualGVDB(VolumeGVDB &gvdb) {
     for (uint32 voxel = 0; voxel < leafVoxels; voxel++) {
       const float value = brickData[voxel];
 
-      if (abs(value) > maxResidual) {
-        maxResidual = abs(value);
+      if (abs(value) > abs(maxResidual)) {
+        maxResidual = value;
       }
     }
   }
