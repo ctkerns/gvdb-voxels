@@ -23,9 +23,6 @@ using namespace nvdb;
 #define FUNC_APPLY_PRESSURE 8
 #define FUNC_MAX 9
 
-// #define CPU_SIM
-// #define COMPENSATE_DRIFT
-
 #define CELLS_X 50
 #define CELLS_Y 50
 #define CELLS_Z 50

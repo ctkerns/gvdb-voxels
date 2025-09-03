@@ -306,9 +306,14 @@ void FluidSystem::transferToGrid() {
   for (int i = 0; i < numcells; i++) {
     cellvel[i] = Vector3DF(0.0f, 0.0f, 0.0f);
     r[i] = Vector3DF(0.0f, 0.0f, 0.0f);
+#ifndef WARM_START
     p[i] = 0.0f;
+#endif
     if (celltype[i] == CellType::Fluid) {
       celltype[i] = CellType::Air;
+#ifdef WARM_START
+      p[i] = 0.0f;
+#endif
     }
   }
 
@@ -529,8 +534,7 @@ void FluidSystem::solveJacobi() {
 
           float div = divergence[getCellIdx(i, j, k)];
 
-          // Neighbor cells' pressures. Only works when solid pressures are
-          // explicitly set to zero.
+          // Neighbor cells' pressures. Assumes solid pressures are kept zero.
           float p_sum = 0.0f;
           p_sum += p[getCellIdx(i - 1, j, k)];
           p_sum += p[getCellIdx(i + 1, j, k)];
@@ -756,8 +760,10 @@ void FluidSystem::solveJacobiCUDA(VolumeGVDB &gvdb) {
                    &gvdb.getAux(AUX_SUBCELL_NID).gpu,
                    &gvdb.getAux(AUX_SUBCELL_POS).gpu};
 
+#ifndef WARM_START
   gvdb.ClearChannel(CHAN_PRESSURE);
   gvdb.ClearChannel(CHAN_PRESSURE_TMP);
+#endif
   gvdb.ClearChannel(CHAN_RESIDUAL);
 
   for (int i = 0; i < solveIters; i++) {

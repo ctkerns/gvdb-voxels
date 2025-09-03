@@ -261,16 +261,19 @@ void Sample::ReportMemory() {
 void Sample::simulate() {
   gvdb.SetPoints(m_pos, m_vel, m_clr);
 
-  // Run fluid simulation
-  fluid.run(gvdb);
+  int itersPerFrame = 10;
+  for (int i = 0; i < itersPerFrame; i++) {
+    // Run fluid simulation
+    fluid.run(gvdb);
+
+    // Rebuild GVDB Render topology
+    gvdb.RebuildTopology(m_numpnts, m_radius * 2.0f, m_origin);
+    gvdb.FinishTopology(false, true);
+    gvdb.UpdateAtlas();
+  }
 
   DataPtr temp;
   gvdb.SetPoints(m_pos, m_vel, temp);
-
-  // Rebuild GVDB Render topology
-  gvdb.RebuildTopology(m_numpnts, m_radius * 2.0f, m_origin);
-  gvdb.FinishTopology(false, true);
-  gvdb.UpdateAtlas();
 
   // Gather points to level set
   gvdb.ClearChannel(CHAN_LEVEL_SET);

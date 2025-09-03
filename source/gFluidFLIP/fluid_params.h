@@ -14,6 +14,10 @@
 #define CHAN_PRESSURE_TMP 5
 #define CHAN_RESIDUAL 6
 
+// #define CPU_SIM
+// #define COMPENSATE_DRIFT
+#define WARM_START
+
 typedef struct FluidParams {
   int3 gridres;
   float3 tankMin;

@@ -202,6 +202,10 @@ __global__ void markCells(VDBInfo *gvdb, int num_sc, int *sc_nid, int *sc_cnt,
       return;
     }
   }
+#ifdef WARM_START
+  surf3Dwrite(0.0f, gvdb->volOut[CHAN_PRESSURE], vox.x * sizeof(float), vox.y,
+              vox.z);
+#endif
 }
 
 __global__ void computeDivergence(VDBInfo *gvdb, int num_sc, int *sc_nid,
@@ -253,7 +257,7 @@ __global__ void solveJacobi(VDBInfo *gvdb, int num_sc, int p_chan,
   float div = surf3Dread<float>(gvdb->volOut[CHAN_DIVERGENCE],
                                 vox.x * sizeof(float), vox.y, vox.z);
 
-  // Neighbor cells' pressures.
+  // Neighbor cells' pressures. Assumes boundary pressures are kept zero.
   float p_sum = 0.0f;
   p_sum += surf3Dread<float>(gvdb->volOut[p_chan], (vox.x - 1) * sizeof(float),
                              vox.y, vox.z);
