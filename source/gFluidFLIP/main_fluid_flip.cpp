@@ -201,6 +201,7 @@ bool Sample::init() {
 
   // Configure
   gvdb.Configure(3, 3, 3, 3, 5);
+  gvdb.SetChannelDefault(3, 3, 3);
   // int r[2] = {3, 5};
   // int n[2] = {1, 1};
   // gvdb.Configure(2, r, n);

@@ -173,9 +173,9 @@ void FluidSystem::run(VolumeGVDB &gvdb) {
     nvprintf("Simulation finished, exiting\n");
     assert(false);
   }
-  transferToCUDA();
 
 #ifdef CPU_SIM
+  transferToCUDA();
   gvdb.ScalePntPos(fp.numpnts, 1.0f / fp.h); // Convert to grid space
   integrateParticles();
   handleParticleCollision();
@@ -191,6 +191,8 @@ void FluidSystem::run(VolumeGVDB &gvdb) {
 #else // GPU_SIM
   if (frame > 0) {
     gvdb.ScalePntPos(fp.numpnts, 1.0f * fp.h);
+  } else if (frame == 0) {
+    transferToCUDA();
   }
   integrateParticlesCUDA();
   handleParticleCollisionCUDA();
@@ -204,7 +206,6 @@ void FluidSystem::run(VolumeGVDB &gvdb) {
   transferFromGridCUDA(gvdb);
 
   cuCtxSynchronize();
-  transferFromCUDA(); // CPU readback. TODO: Can we avoid this?
 #endif
 
   frame++;
