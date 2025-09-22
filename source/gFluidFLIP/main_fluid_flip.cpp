@@ -51,13 +51,14 @@ public:
   Vector3DF m_origin;
 
   int m_w, m_h;
-  int m_numpnts;
+  int m_numpnts; // TODO: Don't need to store this in multiple places.
   DataPtr m_pos;
   DataPtr m_vel;
   DataPtr m_clr;
   int gl_screen_tex;
   int mouse_down;
   bool m_render_optix;
+  int m_optix_samples;
   bool m_show_points;
   bool m_show_topo;
   bool m_save_png;
@@ -86,23 +87,23 @@ void Sample::RebuildOptixGraph() {
   int m_mat_surf1 =
       optx.AddMaterial("optix_trace_surface", "trace_surface", "trace_shadow");
   MaterialParams *matp = optx.getMaterialParams(m_mat_surf1);
-  matp->light_width = 1.2f;
+  matp->light_width = 0.9f;
   matp->shadow_width = 0.1f;
   matp->shadow_bias = 0.5f;
-  matp->amb_color = Vector3DF(.05f, .05f, .05f);
-  matp->diff_color = Vector3DF(.7f, .7f, .7f);
-  matp->spec_color = Vector3DF(1.f, 1.f, 1.f);
-  matp->spec_power = 400.0;
+  matp->amb_color = Vector3DF(.1f, .15f, .15f);
+  matp->diff_color = Vector3DF(.1f, .12f, .18f);
+  matp->spec_color = Vector3DF(1.2f, 1.2f, 1.2f);
+  matp->spec_power = 200.0;
   matp->env_color = Vector3DF(0.f, 0.f, 0.f);
-  matp->refl_width = 0.5f;
+  matp->refl_width = 0.2f;
   matp->refl_bias = 0.5f;
-  matp->refl_color = Vector3DF(0.4f, 0.4f, 0.4f);
+  matp->refl_color = Vector3DF(0.3f, 0.3f, 0.3f);
 
-  matp->refr_width = 0.0f;
-  matp->refr_color = Vector3DF(0.1f, .1f, .1f);
-  matp->refr_ior = 1.1f;
-  matp->refr_amount = 0.5f;
-  matp->refr_offset = 50.0f;
+  matp->refr_width = 0.05f;
+  matp->refr_color = Vector3DF(0.2f, .2f, .25f);
+  matp->refr_ior = 1.33f;
+  matp->refr_amount = 0.8f;
+  matp->refr_offset = 100.0f;
   matp->refr_bias = 0.5f;
   optx.SetMaterialParams(m_mat_surf1, matp);
 
@@ -149,6 +150,7 @@ bool Sample::init() {
   m_origin = Vector3DF(0, 0, 0);
 
   m_render_optix = true;
+  m_optix_samples = 20;
   m_show_points = false;
   m_show_topo = false;
   m_save_png = false;
@@ -167,6 +169,7 @@ bool Sample::init() {
   gvdb.SetDebug(true);
   gvdb.SetCudaDevice(m_render_optix ? GVDB_DEV_CURRENT : GVDB_DEV_FIRST);
   gvdb.Initialize();
+  gvdb.AddPath(ASSET_PATH);
   gvdb.StartRasterGL();
 
   // Default Camera
@@ -178,7 +181,7 @@ bool Sample::init() {
 
   // Default Light
   Light *lgt = new Light;
-  lgt->setOrbit(Vector3DF(-186, 128, 0), Vector3DF(2250, 220, 2220), 4000, 1.0);
+  lgt->setOrbit(Vector3DF(30, 30, -30), Vector3DF(15, 15, 15), 4000, 1.0);
   gvdb.getScene()->SetLight(0, lgt);
 
   // Default volume params
@@ -298,6 +301,8 @@ void Sample::simulate() {
 }
 
 void Sample::render_frame() {
+  clearScreenGL();
+
   // Render frame
   gvdb.getScene()->SetCrossSection(m_origin, Vector3DF(0, 0, -1));
 
@@ -355,12 +360,17 @@ void Sample::draw_points() {
 }
 
 void Sample::display() {
-  clearScreenGL();
-
   simulate();
 
   // Render frame
-  render_frame();
+  if (m_render_optix) {
+    for (int i = 0; i < m_optix_samples; i++) {
+      optx.SetSample(fluid.getFrame(), i);
+      render_frame();
+    }
+  } else {
+    render_frame();
+  }
 
   if (m_save_png && m_render_optix) {
     // Save current frame to PNG
